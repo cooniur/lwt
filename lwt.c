@@ -286,10 +286,10 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 						 "__switch_to_next: \n\t"
 						 "movl 0x14(%%edi), %%ebx \n\t"		// %ebx = next->status
 
-						 "movl $0x3, 0x14(%%edi) \n\t"		// next->status = LWT_S_RUNNING;
+						 "movl $0x2, 0x14(%%edi) \n\t"		// next->status = LWT_S_RUNNING;
 						 
 						 // Restore stack pointer and base pointer
-						 "movl %%edi, %%ebp \n\t"			// %ebp = next->ebp
+						 "movl (%%edi), %%ebp \n\t"			// %ebp = next->ebp
 						 "movl 0x4(%%edi), %%esp \n\t"		// %esp = next->esp
 
 						 "cmp $0x0, %%ebx \n\t"				// switch (next->status)
@@ -324,10 +324,13 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 						 "cmp $0x3, %%ebx \n\t"				// if (current->status == LWT_S_FINISHED)
 						 "jne __dispatch_end \n\t"			// {
 						 
+						 "__free_stack: \n\t"
 						 "movl 0x18(%%esi), %%ebx \n\t"		//    %ebx = current->stack
+						 "pushal \n\t"
 						 "sub $0x20, %%esp \n\t"			//    allocate stack space for calling free
 						 "movl %%ebx, (%%esp) \n\t"			//    push %ebx
 						 "call free \n\t"					//    free(current->stack)
+						 "popal \n\t"
 						 "movl $0x0, 0x18(%%esi) \n\t"		//	  current->stack = NULL
 						 "movl $0x0, (%%esi) \n\t"			//    current->ebp = NULL
 						 "movl $0x0, 0x4(%%esi) \n\t"		//    current->esp = NULL
@@ -450,6 +453,9 @@ void lwt_yield()
  */
 int lwt_join(lwt_t lwt, void **retval_ptr)
 {
+	if (lwt_current() == lwt)
+		return -1;
+
 	if (lwt->status == LWT_S_DEAD)
 		return -1;
 	
@@ -459,7 +465,7 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	
 	lwt->status = LWT_S_DEAD;
 	*retval_ptr = lwt->return_val;
-	free(lwt);
+	//free(lwt);
 	return 0;
 }
 
