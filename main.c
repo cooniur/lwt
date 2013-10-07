@@ -103,14 +103,15 @@ void* run_3(void *data)
 		return NULL;
 	}
 
-	int *param = (int*)malloc(sizeof(int));
-	*param = 100;
-	lwt_t lwt= lwt_create(run, param);
-	show_return_value(lwt);
-	
 	int i;
 	int count = *((int*)data);
 	printf(" with param %d.\n", count);
+
+	int *param = (int*)malloc(sizeof(int));
+	*param = 100;
+	lwt_t lwt= (run, param);
+	show_return_value(lwt);
+	
 	for (i=0; i<count; i+=3)
 	{
 		if (i > 10)
