@@ -109,7 +109,7 @@ void* run_3(void *data)
 
 	int *param = (int*)malloc(sizeof(int));
 	*param = 100;
-	lwt_t lwt= (run, param);
+	lwt_t lwt= lwt_create(run, param);
 	show_return_value(lwt);
 	
 	for (i=0; i<count; i+=3)
