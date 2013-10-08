@@ -12,6 +12,11 @@
 
 #include "lwt.h"
 
+/**
+ Defines this to enable using the TCB pool
+ */
+#define USING_TCB_POOL
+
 /*==================================================*
  *													*
  *				Useful Marcos						*
@@ -379,106 +384,163 @@ static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue)
 __attribute__ ((noinline))
 static void __lwt_dispatch(lwt_t next, lwt_t current)
 {
-/*
-	if (next->status != LWT_S_CREATED && next->status != LWT_S_READY)
-		return;
+	/*
+	 if (next->status != LWT_S_CREATED && next->status != LWT_S_READY)
+	 return;
+	 
+	 if (current->status != LWT_S_RUNNING && current->status != LWT_S_FINISHED && current->status != LWT_S_DEAD)
+	 return;
+	 */
+	switch (current->status)
+	{
+			// Current thread is running
+		case LWT_S_RUNNING:
+			current->status = LWT_S_READY;
+			__asm__ __volatile__ (
+								  // Save all registers to stack
+								  "pushal \n\t"							// save the current thread's registers to stack
+								  
+								  // Save stack pointer and base pointer
+								  "leal %c[ebp](%0), %%ebx \n\t"		// %ebx = &current->ebp
+								  "movl %%ebp, (%%ebx) \n\t"			// current->ebp = %ebp
+								  "movl %%esp, 0x4(%%ebx) \n\t"			// current->esp = %esp
+								  :
+								  : "r" (current),
+								  LWT_STRUCT_OFFSET(ebp)
+								  :
+								  );
+		default:
+#ifndef USING_TCB_POOL
+			__asm__ __volatile__ (
+								  "movl %0, %%esi \n\t"					// %esi = current;
+								  :										// save it for stack free later
+								  : "r" (current)
+								  :
+								  );
+#endif
+			break;
+	}
+	
+	switch (next->status)
+	{
+			// The next thread is just created, call __lwt_trampoline
+		case LWT_S_CREATED:
+			next->status = LWT_S_RUNNING;
+			__asm__ __volatile__ (
+								  // Restore stack pointer and base pointer
+								  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
+								  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
+								  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
 
-	if (current->status != LWT_S_RUNNING && current->status != LWT_S_FINISHED && current->status != LWT_S_DEAD)
-		return;
-*/
-	    switch (current->status)
-        {
-                        // Current thread is running
-                case LWT_S_RUNNING:
-                        current->status = LWT_S_READY;
-				__asm__ __volatile__ (
-									  // Save all registers to stack
-									  "pushal \n\t"							// save the current thread's registers to stack
-									  
-									  // Save stack pointer and base pointer
-									  "leal %c[ebp](%0), %%ebx \n\t"		// %ebx = &current->ebp
-									  "movl %%ebp, (%%ebx) \n\t"			// current->ebp = %ebp
-									  "movl %%esp, 0x4(%%ebx) \n\t"			// current->esp = %esp
-									  :
-									  : "r" (current),
-									  LWT_STRUCT_OFFSET(ebp)
-									  :
-									  );
-                default:
-				break;
-        }
-
-        switch (next->status)
-        {
-                        // The next thread is just created, call __lwt_trampoline
-                case LWT_S_CREATED:
-                        next->status = LWT_S_RUNNING;
-				__asm__ __volatile__ (
-									  // Restore stack pointer and base pointer
-									  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
-									  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
-									  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
-									  
-									  // Pass function call parameters via stack
-									  "sub $0x40, %%esp \n\t"						// allocate stack space for calling __lwt_start
-									  "leal %c[entry_fn_param](%0), %%ebx \n\t"		// %%ebx = &next->entry_fn_param
-									  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn_param
-									  "movl %%ebx, 0x8(%%esp) \n\t"					// push %%ebx
-									  "leal %c[entry_fn](%0), %%ebx \n\t"			// %%ebx = &next->entry_fn
-									  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn
-									  "movl %%ebx, 0x4(%%esp) \n\t"					// push %%ebx
-									  
-									  // Set the returning address of __lwt_start() to lwt_die()
-									  "leal lwt_die, %%ebx \n\t"					// %%ebx = lwt_die
-									  "movl %%ebx, (%%esp) \n\t"					// push %%ebx
-									  
-									  // Jumps to __lwt_trampoline, which will call __lwt_start.
-									  // The returning address of __lwt_start is lwt_die()
-									  "jmp __lwt_trampoline \n\t"
-									  :
-									  : "r" (next),
-									  LWT_STRUCT_OFFSET(ebp),
-									  LWT_STRUCT_OFFSET(entry_fn),
-									  LWT_STRUCT_OFFSET(entry_fn_param)
-									  :
-									  );
-				/* +------------------------------------------------------------+ */
-				/* | !! Attention !!											| */
-				/* +------------------------------------------------------------+ */
-				/* |  The function parameters can NOT be accessed here,			| */
-				/* |  because they were stored on the "current" thread's stack,	| */
-				/* |  but now we have switched to the "next" thread's stack.	| */
-				/* +------------------------------------------------------------+ */
-                        break;
-                
-                        // The next thread is ready to be resumed
-                case LWT_S_READY:
-				next->status = LWT_S_RUNNING;
-				__asm__ __volatile__ (
-									  // Restore stack pointer and base pointer
-									  "leal %c[ebp](%0), %%ebx \n\t"				// %ebx = &next->ebp
-									  "movl (%%ebx), %%ebp \n\t"					// %ebp = next->ebp
-									  "movl 0x4(%%ebx), %%esp \n\t"					// %esp = next->esp
-									  									  
-									  // Restore registers
-									  "popal \n\t"							// resume the next thread
-									  :
-									  : "r" (next),
-									  LWT_STRUCT_OFFSET(ebp)
-									  :
-									  );
-				/* +------------------------------------------------------------+ */
-				/* | !! Attention !!											| */
-				/* +------------------------------------------------------------+ */
-				/* |  The function parameters can NOT be accessed here,			| */
-				/* |  because they were stored on the "current" thread's stack,	| */
-				/* |  but now we have switched to the "next" thread's stack.	| */
-				/* +------------------------------------------------------------+ */
-                        break;
-                        // Does nothing but to surpress the warnings.
-                default:
-                        break;
-        }
+// if not using TCB pool, free stack
+#ifndef USING_TCB_POOL
+								  // Free current->stack if current->status == LWT_P_FINISHED
+								  "__try_to_free_stack_1: \n\t"
+								  "pushal \n\t"								// avoid crashing the next thread's registers.
+								  "movl 0x14(%%esi), %%ebx \n\t"			// %ebx = current->status
+								  "cmp $0x3, %%ebx \n\t"					// if (current->status == LWT_S_FINISHED)
+								  "jne __after_try_to_free_stack_1 \n\t"	// {
+								  "movl 0x18(%%esi), %%ebx \n\t"			//    %ebx = current->stack
+								  "pushal \n\t"
+								  "sub $0x20, %%esp \n\t"					//    allocate stack space for calling free
+								  "movl %%ebx, (%%esp) \n\t"				//    push %ebx
+								  "add $0x20, %%esp \n\t"					//    release stack space allocated for calling free
+								  "call free \n\t"							//    free(current->stack)
+								  "popal \n\t"
+								  "movl $0x0, 0x18(%%esi) \n\t"				//    current->stack = NULL
+								  "movl $0x0, (%%esi) \n\t"					//    current->ebp = NULL
+								  "movl $0x0, 0x4(%%esi) \n\t"				//    current->esp = NULL
+								  "movl $0x0, 0x8(%%esi) \n\t"				//    current->entry_fn = NULL
+								  "movl $0x0, 0xc(%%esi) \n\t"				//    current->entry_fn_param = NULL
+								  // }
+								  "__after_try_to_free_stack_1: \n\t"
+								  "popal \n\t"								// restore the next thread's registers
+#endif
+								  
+								  // Pass function call parameters via stack
+								  "sub $0x40, %%esp \n\t"						// allocate stack space for calling __lwt_start
+								  "leal %c[entry_fn_param](%0), %%ebx \n\t"		// %%ebx = &next->entry_fn_param
+								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn_param
+								  "movl %%ebx, 0x8(%%esp) \n\t"					// push %%ebx
+								  "leal %c[entry_fn](%0), %%ebx \n\t"			// %%ebx = &next->entry_fn
+								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn
+								  "movl %%ebx, 0x4(%%esp) \n\t"					// push %%ebx
+								  
+								  // Set the returning address of __lwt_start() to lwt_die()
+								  "leal lwt_die, %%ebx \n\t"					// %%ebx = lwt_die
+								  "movl %%ebx, (%%esp) \n\t"					// push %%ebx
+								  
+								  // Jumps to __lwt_trampoline, which will call __lwt_start.
+								  // The returning address of __lwt_start is lwt_die()
+								  "jmp __lwt_trampoline \n\t"
+								  :
+								  : "r" (next),
+								  LWT_STRUCT_OFFSET(ebp),
+								  LWT_STRUCT_OFFSET(entry_fn),
+								  LWT_STRUCT_OFFSET(entry_fn_param)
+								  :
+								  );
+			/* +------------------------------------------------------------+ */
+			/* | !! Attention !!											| */
+			/* +------------------------------------------------------------+ */
+			/* |  The function parameters can NOT be accessed here,			| */
+			/* |  because they were stored on the "current" thread's stack,	| */
+			/* |  but now we have switched to the "next" thread's stack.	| */
+			/* +------------------------------------------------------------+ */
+			break;
+			
+			// The next thread is ready to be resumed
+		case LWT_S_READY:
+			next->status = LWT_S_RUNNING;
+			__asm__ __volatile__ (
+								  // Restore stack pointer and base pointer
+								  "leal %c[ebp](%0), %%ebx \n\t"				// %ebx = &next->ebp
+								  "movl (%%ebx), %%ebp \n\t"					// %ebp = next->ebp
+								  "movl 0x4(%%ebx), %%esp \n\t"					// %esp = next->esp
+								  
+// if not using TCB pool, free stack
+#ifndef USING_TCB_POOL
+								  // Free current->stack if current->status == LWT_P_FINISHED
+								  "__try_to_free_stack_2: \n\t"
+								  "pushal \n\t"									// avoid crashing the next thread's registers.
+								  "movl 0x14(%%esi), %%ebx \n\t"				// %ebx = current->status
+								  "cmp $0x3, %%ebx \n\t"						// if (current->status == LWT_S_FINISHED)
+								  "jne __after_try_to_free_stack_2 \n\t"		// {
+								  "movl 0x18(%%esi), %%ebx \n\t"				//    %ebx = current->stack
+								  "pushal \n\t"
+								  "sub $0x20, %%esp \n\t"						//    allocate stack space for calling free
+								  "movl %%ebx, (%%esp) \n\t"					//    push %ebx
+								  "call free \n\t"								//    free(current->stack)
+								  "add $0x20, %%esp \n\t"						//    release stack space allocated for calling free
+								  "popal \n\t"
+								  "movl $0x0, 0x18(%%esi) \n\t"					//    current->stack = NULL
+								  "movl $0x0, (%%esi) \n\t"						//    current->ebp = NULL
+								  "movl $0x0, 0x4(%%esi) \n\t"					//    current->esp = NULL
+								  "movl $0x0, 0x8(%%esi) \n\t"					//    current->entry_fn = NULL
+								  "movl $0x0, 0xc(%%esi) \n\t"					//    current->entry_fn_param = NULL
+								  // }
+								  "__after_try_to_free_stack_2: \n\t"
+								  "popal \n\t"									// restore the next thread's registers
+#endif
+								  // Restore registers
+								  "popal \n\t"							// resume the next thread
+								  :
+								  : "r" (next),
+								  LWT_STRUCT_OFFSET(ebp)
+								  :
+								  );
+			/* +------------------------------------------------------------+ */
+			/* | !! Attention !!											| */
+			/* +------------------------------------------------------------+ */
+			/* |  The function parameters can NOT be accessed here,			| */
+			/* |  because they were stored on the "current" thread's stack,	| */
+			/* |  but now we have switched to the "next" thread's stack.	| */
+			/* +------------------------------------------------------------+ */
+			break;
+			// Does nothing but to surpress the warnings.
+		default:
+			break;
+	}
 }
 
 /*--------------------------------------------------*
@@ -551,7 +613,12 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 		__lwt_init_tcb_pool();
 		
 	// creates tcb
+#ifdef USING_TCB_POOL
 	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
+#else
+	lwt_t new_lwt = __lwt_init_lwt();
+#endif
+	
 	new_lwt->id = __lwt_get_next_threadid();
 	new_lwt->status = LWT_S_CREATED;
 	new_lwt->prev = NULL;
@@ -623,7 +690,11 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	if (retval_ptr)
 		*retval_ptr = lwt->return_val;
 
+#ifdef USING_TCB_POOL
 	__lwt_q_inqueue(&__dead_q, lwt);
+#else
+	free(lwt);
+#endif
 	return 0;
 }
 
