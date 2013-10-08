@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
-#include <assert.h>
 
 #include "lwt.h"
 
@@ -54,6 +53,15 @@ struct __lwt_info_t__
 	size_t num_runnable;
 	size_t num_zombies;
 	size_t num_blocked;
+};
+
+/**
+ Thread queue type
+ */
+struct __lwt_queue_t__
+{
+	lwt_t head;
+	lwt_t tail;
 };
 
 /**
@@ -137,9 +145,21 @@ struct __lwt_t__
 /**
  The Run Queue
  __lwt_rq_head always points to the current thread
+ run_q.head always points to the current thread
  */
 lwt_t __lwt_rq_head = NULL;
 lwt_t __lwt_rq_tail = NULL;
+struct __lwt_queue_t__ run_q = {NULL, NULL};
+
+/**
+ The Dead Queue: recycled TCBs
+ */
+struct __lwt_queue_t__ dead_q = {NULL, NULL};
+
+/**
+ The Zombie Queue: thread that are not joined
+ */
+struct __lwt_queue_t__ zombie_q = {NULL, NULL};
 
 /**
  The main thread TCB
@@ -204,6 +224,85 @@ static int __lwt_get_next_threadid()
  *	Run Queue functions								*
  *													*
  *--------------------------------------------------*/
+static int __lwt_q_empty(struct __lwt_queue_t__ *queue)
+{
+	if (!queue->head && !queue->tail)
+		return 1;
+	else
+		return 0;
+}
+
+static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt)
+{
+	if (__lwt_q_empty(queue))
+	{
+		lwt->next = lwt;
+		lwt->prev = lwt;
+		queue->head = lwt;
+		queue->tail = lwt;
+	}
+	else
+	{
+		lwt->prev = queue->tail;
+		lwt->next = queue->head;
+		queue->tail->next = lwt;
+		queue->tail = lwt;
+	}
+}
+
+static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
+{
+	if (__lwt_q_empty(queue))
+		return NULL;
+	
+	lwt_t ret = queue->head;
+	
+	queue->head = queue->head->next;
+	queue->tail = queue->tail->next;
+	
+	return ret;
+}
+
+static lwt_t __lwt_q_remove_head(struct __lwt_queue_t__ *queue)
+{
+	if (__lwt_q_empty(queue))
+		return NULL;
+	
+	lwt_t ret = queue->head;
+	
+	queue->tail->next = queue->head->next;
+	queue->head->next->prev = queue->tail;
+	queue->head = queue->head->next;
+	
+	ret->next = NULL;
+	ret->prev = NULL;
+	
+	return ret;
+}
+
+void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
+{
+	if (!tar)
+		return;
+	
+	if (__lwt_q_empty(queue))
+		__lwt_q_inqueue(queue, tar);
+	else
+	{
+		if (tar->prev->next != tar)
+		{
+			tar->prev->next = tar->next;
+			tar->next->prev = tar->prev;
+			tar->next = queue->head->next;
+			queue->head->next->prev = tar;
+			tar->prev = queue->head;
+			queue->head->next = tar;
+		}
+		queue->tail = queue->head;
+		queue->head = tar;
+	}
+}
+
 /**
  Returns 1 if the run queue is empty; otherwise, 0
  */
