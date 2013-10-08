@@ -14,6 +14,10 @@
  *				Types Definition					*
  *													*
  *==================================================*/
+/**
+ LWT_NULL: Defines the marco of a NULL thread descriptor
+ */
+#define LWT_NULL NULL
 
 /**
  lwt_fn_t: Type of a pointer to a thread entry function
@@ -30,6 +34,16 @@ typedef struct __lwt_t__ *lwt_t;
  */
 typedef enum __lwt_status_t__ lwt_status_t;
 
+/**
+ lwt_info_type_t: Defines types of thread information
+ */
+typedef enum
+{
+	LWT_INFO_NTHD_RUNNABLE = 0,
+	LWT_INFO_NTHD_ZOMBIES,
+	LWT_INFO_NTHD_BLOCKED
+} lwt_info_type_t;
+
 /*==================================================*
  *													*
  *				Declaration							*
@@ -44,9 +58,9 @@ typedef enum __lwt_status_t__ lwt_status_t;
 lwt_t lwt_create(lwt_fn_t fn, void *data);
 
 /**
- Yields to the next available thread
+ Yields to a specific thread. If NULL passed, yields to next available thread
  */
-void lwt_yield();
+void lwt_yield(lwt_t target);
 
 /**
  Kill the current thread.
@@ -71,5 +85,7 @@ int lwt_id(lwt_t lwt);
  Returns -1 if fails to join; otherwise, 0
  */
 int lwt_join(lwt_t lwt, void **retval_ptr);
+
+size_t lwt_info(lwt_info_type_t type);
 
 #endif

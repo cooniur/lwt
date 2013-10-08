@@ -8,147 +8,166 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 #include "lwt.h"
 
-void show_return_value(lwt_t lwt_to_join)
-{
-	void *data = NULL;
-	lwt_t lwt_cur = lwt_current();
-	if (lwt_join(lwt_to_join, &data) == 0)
-	{
-		if (data)
-		{
-			printf("%d joined thread %d, return value is %d\n", lwt_id(lwt_cur), lwt_id(lwt_to_join), *((int*)data));
-			free(data);
-		}
-	}
-}
+#define rdtscll(val) __asm__ __volatile__("rdtsc" : "=A" (val))
 
-void* run(void *data)
-{
-	int *ret = (int*)malloc(sizeof(int));
-	*ret = -1;
-	lwt_t cur = lwt_current();
-	int id = lwt_id(cur);
-	printf("--> #%d begins to run", id);
-	if (data == NULL)
-	{
-		printf(" with NULL data.\n");
-		return NULL;
-	}
+#define ITER 10000
 
+int thd_cnt = 0;
+
+void *
+fn_bounce(void *d)
+{
 	int i;
-	int count = *((int*)data);
-	printf(" with param %d.\n", count);
-	for (i=0; i<count; i++)
-	{
-		if (i > 40)
-		{
-			printf("--> #%d running: Thread will die...\n", id);
-			*ret = -2;
-			lwt_die(ret);
-		}
-		
-		printf("--> #%d running: [%d]\n", id, i);
-		lwt_yield();
-	}
+	unsigned long long start, end;
 	
-	printf("--> #%d finished.\n", id);
-	return ret;
+	thd_cnt++;
+	lwt_yield(LWT_NULL);
+	lwt_yield(LWT_NULL);
+	rdtscll(start);
+	for (i = 0 ; i < ITER ; i++) lwt_yield(LWT_NULL);
+	rdtscll(end);
+	lwt_yield(LWT_NULL);
+	lwt_yield(LWT_NULL);
+	
+	if (!d) printf("Overhead of yield is %lld\n", (end-start)/ITER);
+	
+	return NULL;
 }
 
-void* run_2(void *data)
+void *
+fn_null(void *d)
+{ thd_cnt++; return NULL; }
+
+void *
+fn_identity(void *d)
+{ thd_cnt++; return d; }
+
+void *
+fn_nested_joins(void *d)
 {
-	int *ret = (int*)malloc(sizeof(int));
-	*ret = -1;
-	lwt_t cur = lwt_current();
-	int id = lwt_id(cur);
-	printf("--> #%d begins to run", id);
-	if (data == NULL)
-	{
-		printf(" with NULL data.\n");
-		return NULL;
-	}
+	lwt_t chld;
 	
-	int i;
-	int count = *((int*)data);
-	printf(" with param %d.\n", count);
-	for (i=0; i<count; i+=2)
-	{
-		if (i > 10)
-		{
-			printf("--> #%d running: Thread will die...\n", id);
-			*ret = -2;
-			lwt_die(ret);
-		}
-		
-		printf("--> #%d running: [%d]\n", id, i);
-		lwt_yield();
+	thd_cnt++;
+	if (d) {
+		lwt_yield(LWT_NULL);
+		lwt_yield(LWT_NULL);
+		assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1);
+		lwt_die(NULL);
 	}
-	
-	printf("--> #%d finished.\n", id);
-	return ret;
+	chld = lwt_create(fn_nested_joins, (void*)1);
+	void* ret = NULL;
+	lwt_join(chld, &ret);
 }
 
-void* run_3(void *data)
+volatile int sched[2] = {0, 0};
+volatile int curr = 0;
+
+void *
+fn_sequence(void *d)
 {
-	int *ret = (int*)malloc(sizeof(int));
-	*ret = -1;
-	lwt_t cur = lwt_current();
-	int id = lwt_id(cur);
-	printf("--> #%d begins to run", id);
-	if (data == NULL)
-	{
-		printf(" with NULL data.\n");
-		return NULL;
-	}
-
-	int i;
-	int count = *((int*)data);
-	printf(" with param %d.\n", count);
-
-	int *param = (int*)malloc(sizeof(int));
-	*param = 100;
-	lwt_t lwt= lwt_create(run, param);
-	show_return_value(lwt);
+	int i, other, val = (int)d;
 	
-	for (i=0; i<count; i+=3)
-	{
-		if (i > 10)
-		{
-			printf("--> #%d running: Thread will die...\n", id);
-			*ret = -2;
-			lwt_die(ret);
-		}
-		
-		printf("--> #%d running: [%d]\n", id, i);
-		lwt_yield();
+	thd_cnt++;
+	for (i = 0 ; i < ITER ; i++) {
+		other = curr;
+		curr  = (curr + 1) % 2;
+		sched[curr] = val;
+		assert(sched[other] != val);
+		lwt_yield(LWT_NULL);
 	}
 	
-	printf("--> #%d finished.\n", id);
-	return ret;
-	
+	return NULL;
 }
+
+void *
+fn_join(void *d)
+{
+	lwt_t t = (lwt_t)d;
+	void *r;
+	
+	thd_cnt++;
+	lwt_join(t, &r);
+	assert(r == (void*)0x37337);
+}
+
+#define IS_RESET()						\
+assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
+lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
+lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
+
 
 int main(int argc, char *argv[])
 {
-	int a = 10;
-	lwt_t lwt = lwt_create(run, &a);
-	int b = 20;
-	lwt_t lwt2 = lwt_create(run_2, &b);
-	int c = 33;
-	lwt_t lwt3 = lwt_create(run_3, &c);
-
-	int count = 0;
-	while(count < 110)
-	{
-		printf("Main: [%d]\n", count++);
-		lwt_yield();	// should jump to the new thread we just created.
-		
-		show_return_value(lwt);
-		show_return_value(lwt3);
+	lwt_t chld1, chld2;
+	int i;
+	unsigned long long start, end;
+	void* data;
+	
+	/* Performance tests */
+	rdtscll(start);
+	for (i = 0 ; i < ITER ; i++) {
+		chld1 = lwt_create(fn_null, NULL);
+		lwt_join(chld1, NULL);
 	}
+	rdtscll(end);
+	printf("Overhead for fork/join is %lld\n", (end-start)/ITER);
+	IS_RESET();
+	
+	chld1 = lwt_create(fn_bounce, NULL);
+	chld2 = lwt_create(fn_bounce, NULL);
+	lwt_join(chld1, NULL);
+	lwt_join(chld2, NULL);
+	IS_RESET();
+	
+	/* functional tests: scheduling */
+	lwt_yield(LWT_NULL);
+	
+	chld1 = lwt_create(fn_sequence, (void*)1);
+	chld2 = lwt_create(fn_sequence, (void*)2);
+	lwt_join(chld2, NULL);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	/* functional tests: join */
+	chld1 = lwt_create(fn_null, NULL);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	chld1 = lwt_create(fn_null, NULL);
+	lwt_yield(LWT_NULL);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	chld1 = lwt_create(fn_nested_joins, NULL);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	/* functional tests: join only from parents */
+	chld1 = lwt_create(fn_identity, (void*)0x37337);
+	chld2 = lwt_create(fn_join, chld1);
+	lwt_yield(LWT_NULL);
+	lwt_yield(LWT_NULL);
+	lwt_join(chld2, NULL);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	/* functional tests: passing data between threads */
+	chld1 = lwt_create(fn_identity, (void*)0x37337);
+	lwt_join(chld1, &data);
+	assert((void*)0x37337 == data);
+	IS_RESET();
+	
+	/* functional tests: directed yield */
+	chld1 = lwt_create(fn_null, NULL);
+	lwt_yield(chld1);
+	assert(lwt_info(LWT_INFO_NTHD_ZOMBIES) == 1);
+	lwt_join(chld1, NULL);
+	IS_RESET();
+	
+	assert(thd_cnt == ITER+12);
 
-	show_return_value(lwt2);
 	return 0;
 }
