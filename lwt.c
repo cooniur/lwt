@@ -257,7 +257,7 @@ static lwt_t __lwt_rq_remove_head()
  Switches from the "current" thread to the "next" thread
  Must be noinline function
  */
-__attribute__ ((noinline))
+//__attribute__ ((noinline))
 static void __lwt_dispatch(lwt_t next, lwt_t current)
 {
 	if (next->status != LWT_S_CREATED && next->status != LWT_S_READY)
