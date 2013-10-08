@@ -28,6 +28,11 @@
  */
 #define DEFAULT_LWT_STACK_SIZE	(1024 * 16)
 
+/**
+ Default TCB pool size
+ */
+#define TCB_POOL_SIZE (64)
+
 /*==================================================*
  *													*
  *				Types Definition					*
@@ -62,6 +67,7 @@ struct __lwt_queue_t__
 {
 	lwt_t head;
 	lwt_t tail;
+	size_t size;
 };
 
 /**
@@ -146,17 +152,12 @@ struct __lwt_t__
  The Run Queue
  run_q.head always points to the current thread
  */
-struct __lwt_queue_t__ __run_q = {NULL, NULL};
+struct __lwt_queue_t__ __run_q = {NULL, NULL, 0};
 
 /**
  The Dead Queue: recycled TCBs
  */
-struct __lwt_queue_t__ __dead_q = {NULL, NULL};
-
-/**
- The Zombie Queue: thread that are not joined
- */
-struct __lwt_queue_t__ __zombie_q = {NULL, NULL};
+struct __lwt_queue_t__ __dead_q = {NULL, NULL, 0};
 
 /**
  The main thread TCB
@@ -188,10 +189,12 @@ void __lwt_start(lwt_fn_t fn, void* data);
 
 static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current);
 
+static lwt_t __lwt_init_lwt();
+static void __lwt_init_tcb_pool();
 static int __lwt_get_next_threadid();
 static void __lwt_main_thread_init();
 
-static int __lwt_q_empty(struct __lwt_queue_t__ *queue);
+static inline int __lwt_q_empty(struct __lwt_queue_t__ *queue);
 static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt);
 static lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue);
 static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue);
@@ -212,6 +215,37 @@ static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue);
  *--------------------------------------------------*/
 
 /**
+ Initialize TCB pool
+ */
+static void __lwt_init_tcb_pool()
+{
+	int i;
+	for (i=0; i<TCB_POOL_SIZE; i++)
+	{
+		__lwt_q_inqueue(&__dead_q, __lwt_init_lwt());
+	}
+}
+
+lwt_t __lwt_init_lwt()
+{
+	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
+	new_lwt->id = __lwt_get_next_threadid();
+	new_lwt->status = LWT_S_CREATED;
+	new_lwt->prev = NULL;
+	new_lwt->next = NULL;
+	new_lwt->entry_fn = NULL;
+	new_lwt->entry_fn_param = NULL;
+	new_lwt->return_val = NULL;
+	
+	// creates stack
+	new_lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
+	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
+	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
+	new_lwt->esp = new_lwt->ebp;
+	return new_lwt;
+}
+
+/**
  Gets the next available thread id #
  */
 static int __lwt_get_next_threadid()
@@ -229,10 +263,7 @@ static int __lwt_get_next_threadid()
  */
 static int __lwt_q_empty(struct __lwt_queue_t__ *queue)
 {
-	if (!queue->head && !queue->tail)
-		return 1;
-	else
-		return 0;
+	return queue->size == 0;
 }
 
 /**
@@ -255,6 +286,7 @@ static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt)
 		queue->tail->next = lwt;
 		queue->tail = lwt;
 	}
+	queue->size++;
 }
 
 /**
@@ -291,6 +323,11 @@ static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
 	ret->next = NULL;
 	ret->prev = NULL;
 	
+	queue->size--;
+	
+	if (queue->size == 0)
+		queue->head = queue->tail = NULL;
+
 	return ret;
 }
 
@@ -368,12 +405,6 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 									  :
 									  );
                 default:
-				__asm__ __volatile__ (
-									  "movl %0, %%esi \n\t"					// %esi = current;
-									  :										// save it for stack free later
-									  : "r" (current)
-									  :
-									  );
 				break;
         }
 
@@ -387,28 +418,6 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 									  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
 									  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
 									  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
-									  
-									  // Free current->stack if current->status == LWT_P_FINISHED
-									  "__try_to_free_stack_1: \n\t"
-									  "pushal \n\t"								// avoid crashing the next thread's registers.
-									  "movl 0x14(%%esi), %%ebx \n\t"			// %ebx = current->status
-									  "cmp $0x3, %%ebx \n\t"					// if (current->status == LWT_S_FINISHED)
-									  "jne __after_try_to_free_stack_1 \n\t"	// {
-									  "movl 0x18(%%esi), %%ebx \n\t"			//    %ebx = current->stack
-									  "pushal \n\t"
-									  "sub $0x20, %%esp \n\t"					//    allocate stack space for calling free
-									  "movl %%ebx, (%%esp) \n\t"				//    push %ebx
-									  "add $0x20, %%esp \n\t"					//    release stack space allocated for calling free
-									  "call free \n\t"							//    free(current->stack)
-									  "popal \n\t"
-									  "movl $0x0, 0x18(%%esi) \n\t"				//    current->stack = NULL
-									  "movl $0x0, (%%esi) \n\t"					//    current->ebp = NULL
-									  "movl $0x0, 0x4(%%esi) \n\t"				//    current->esp = NULL
-									  "movl $0x0, 0x8(%%esi) \n\t"				//    current->entry_fn = NULL
-									  "movl $0x0, 0xc(%%esi) \n\t"				//    current->entry_fn_param = NULL
-																				// }
-									  "__after_try_to_free_stack_1: \n\t"
-									  "popal \n\t"								// restore the next thread's registers
 									  
 									  // Pass function call parameters via stack
 									  "sub $0x40, %%esp \n\t"						// allocate stack space for calling __lwt_start
@@ -450,29 +459,7 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 									  "leal %c[ebp](%0), %%ebx \n\t"				// %ebx = &next->ebp
 									  "movl (%%ebx), %%ebp \n\t"					// %ebp = next->ebp
 									  "movl 0x4(%%ebx), %%esp \n\t"					// %esp = next->esp
-									  
-									  // Free current->stack if current->status == LWT_P_FINISHED
-									  "__try_to_free_stack_2: \n\t"
-									  "pushal \n\t"									// avoid crashing the next thread's registers.
-									  "movl 0x14(%%esi), %%ebx \n\t"				// %ebx = current->status
-									  "cmp $0x3, %%ebx \n\t"						// if (current->status == LWT_S_FINISHED)
-									  "jne __after_try_to_free_stack_2 \n\t"		// {
-									  "movl 0x18(%%esi), %%ebx \n\t"				//    %ebx = current->stack
-									  "pushal \n\t"
-									  "sub $0x20, %%esp \n\t"						//    allocate stack space for calling free
-									  "movl %%ebx, (%%esp) \n\t"					//    push %ebx
-									  "call free \n\t"								//    free(current->stack)
-									  "add $0x20, %%esp \n\t"						//    release stack space allocated for calling free
-									  "popal \n\t"
-									  "movl $0x0, 0x18(%%esi) \n\t"					//    current->stack = NULL
-									  "movl $0x0, (%%esi) \n\t"						//    current->ebp = NULL
-									  "movl $0x0, 0x4(%%esi) \n\t"					//    current->esp = NULL
-									  "movl $0x0, 0x8(%%esi) \n\t"					//    current->entry_fn = NULL
-									  "movl $0x0, 0xc(%%esi) \n\t"					//    current->entry_fn_param = NULL
-																					// }
-									  "__after_try_to_free_stack_2: \n\t"
-									  "popal \n\t"									// restore the next thread's registers
-									  
+									  									  
 									  // Restore registers
 									  "popal \n\t"							// resume the next thread
 									  :
@@ -560,18 +547,24 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 {
 	__lwt_main_thread_init();
 	
+	if (__dead_q.size == 0)
+		__lwt_init_tcb_pool();
+		
 	// creates tcb
-	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
+	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
 	new_lwt->id = __lwt_get_next_threadid();
 	new_lwt->status = LWT_S_CREATED;
+	new_lwt->prev = NULL;
 	new_lwt->next = NULL;
 	new_lwt->entry_fn = fn;
 	new_lwt->entry_fn_param = data;
 	new_lwt->return_val = NULL;
 
-	// creates stack
-	new_lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
-	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
+	if (new_lwt->stack == 0)
+	{
+		printf("stack is zero.");
+		exit(1);
+	}
 	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
 	new_lwt->esp = new_lwt->ebp;
 	
@@ -630,7 +623,7 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	if (retval_ptr)
 		*retval_ptr = lwt->return_val;
 
-	free(lwt);
+	__lwt_q_inqueue(&__dead_q, lwt);
 	return 0;
 }
 
