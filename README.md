@@ -3,4 +3,4 @@ lwt
 
 Light-Weighted Thread Library
 
-Branch 'preemp': Working on preemptive lwt switching using signals.
+version 0.1 alpha
