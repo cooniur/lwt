@@ -144,22 +144,19 @@ struct __lwt_t__
  *==================================================*/
 /**
  The Run Queue
- __lwt_rq_head always points to the current thread
  run_q.head always points to the current thread
  */
-lwt_t __lwt_rq_head = NULL;
-lwt_t __lwt_rq_tail = NULL;
-struct __lwt_queue_t__ run_q = {NULL, NULL};
+struct __lwt_queue_t__ __run_q = {NULL, NULL};
 
 /**
  The Dead Queue: recycled TCBs
  */
-struct __lwt_queue_t__ dead_q = {NULL, NULL};
+struct __lwt_queue_t__ __dead_q = {NULL, NULL};
 
 /**
  The Zombie Queue: thread that are not joined
  */
-struct __lwt_queue_t__ zombie_q = {NULL, NULL};
+struct __lwt_queue_t__ __zombie_q = {NULL, NULL};
 
 /**
  The main thread TCB
@@ -194,10 +191,13 @@ static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current)
 static int __lwt_get_next_threadid();
 static void __lwt_main_thread_init();
 
-static int __lwt_rq_empty();
-static void __lwt_rq_inqueue(lwt_t new_lwt);
-static lwt_t __lwt_rq_dequeue();
-static lwt_t __lwt_rq_remove_head();
+static int __lwt_q_empty(struct __lwt_queue_t__ *queue);
+static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt);
+static lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue);
+static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue);
+static void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar);
+static inline lwt_t __lwt_q_head(struct __lwt_queue_t__ *queue);
+static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue);
 
 /*==================================================*
  *													*
@@ -224,6 +224,9 @@ static int __lwt_get_next_threadid()
  *	Run Queue functions								*
  *													*
  *--------------------------------------------------*/
+/**
+ Returns 1 if the run queue is empty; otherwise, 0
+ */
 static int __lwt_q_empty(struct __lwt_queue_t__ *queue)
 {
 	if (!queue->head && !queue->tail)
@@ -232,6 +235,10 @@ static int __lwt_q_empty(struct __lwt_queue_t__ *queue)
 		return 0;
 }
 
+/**
+ Adds the new_lwt to the tail of the run queue.
+ Makes sure tail->next is always the head
+ */
 static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt)
 {
 	if (__lwt_q_empty(queue))
@@ -250,7 +257,10 @@ static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt)
 	}
 }
 
-static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
+/**
+ Returns the head of the run queue, moves the head to head->next
+ */
+static lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue)
 {
 	if (__lwt_q_empty(queue))
 		return NULL;
@@ -263,7 +273,11 @@ static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
 	return ret;
 }
 
-static lwt_t __lwt_q_remove_head(struct __lwt_queue_t__ *queue)
+/**
+ Removes the head node from the run queue and returns it.
+ Moves head to head->next
+ */
+static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
 {
 	if (__lwt_q_empty(queue))
 		return NULL;
@@ -280,7 +294,10 @@ static lwt_t __lwt_q_remove_head(struct __lwt_queue_t__ *queue)
 	return ret;
 }
 
-void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
+/**
+ Move tar to the head of the queue
+ */
+static void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
 {
 	if (!tar)
 		return;
@@ -303,97 +320,14 @@ void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
 	}
 }
 
-/**
- Returns 1 if the run queue is empty; otherwise, 0
- */
-static int __lwt_rq_empty()
+static inline lwt_t __lwt_q_head(struct __lwt_queue_t__ *queue)
 {
-	if (!__lwt_rq_head && !__lwt_rq_tail)
-		return 1;
-	else
-		return 0;
+	return queue->head;
 }
 
-/**
- Adds the new_lwt to the tail of the run queue.
- Makes sure tail->next is always the head
- */
-static void __lwt_rq_inqueue(lwt_t new_lwt)
+static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue)
 {
-	if (__lwt_rq_empty())
-	{
-		new_lwt->next = new_lwt;
-		new_lwt->prev = new_lwt;
-		__lwt_rq_head = new_lwt;
-		__lwt_rq_tail = new_lwt;
-	}
-	else
-	{
-		new_lwt->prev = __lwt_rq_tail;
-		new_lwt->next = __lwt_rq_head;
-		__lwt_rq_tail->next = new_lwt;
-		__lwt_rq_tail = new_lwt;
-	}
-}
-
-/**
- Returns the head of the run queue, moves the head to head->next
- */
-static lwt_t __lwt_rq_dequeue()
-{
-	if (__lwt_rq_empty())
-		return NULL;
-	
-	lwt_t ret = __lwt_rq_head;
-	
-	__lwt_rq_head = __lwt_rq_head->next;
-	__lwt_rq_tail = __lwt_rq_tail->next;
-	
-	return ret;
-}
-
-/**
- Removes the head node from the run queue and returns it.
- Moves head to head->next
- */
-static lwt_t __lwt_rq_remove_head()
-{
-	if (__lwt_rq_empty())
-		return NULL;
-	
-	lwt_t ret = __lwt_rq_head;
-	
-	__lwt_rq_tail->next = __lwt_rq_head->next;
-	__lwt_rq_head->next->prev = __lwt_rq_tail;
-	__lwt_rq_head = __lwt_rq_head->next;
-
-	ret->next = NULL;
-	ret->prev = NULL;
-	
-	return ret;
-}
-
-void __lwt_rq_queue_jmp(lwt_t tar)
-{
-	if (!tar)
-		return;
-	
-	if (__lwt_rq_empty())
-		__lwt_rq_inqueue(tar);
-	else
-	{
-		if (tar->prev->next != tar)
-		{
-			tar->prev->next = tar->next;
-			tar->next->prev = tar->prev;
-			tar->next = __lwt_rq_head->next;
-			__lwt_rq_head->next->prev = tar;
-			tar->prev = __lwt_rq_head;
-			__lwt_rq_head->next = tar;
-		}
-		__lwt_rq_tail = __lwt_rq_head;
-		__lwt_rq_head = tar;
-	}
+	return queue->tail;
 }
 
 /*--------------------------------------------------*
@@ -580,7 +514,7 @@ static void __lwt_main_thread_init()
 	__main_thread->stack = NULL;
 	__main_thread->next = NULL;
 	
-	__lwt_rq_inqueue(__main_thread);
+	__lwt_q_inqueue(&__run_q, __main_thread);
 }
 
 /**
@@ -641,7 +575,7 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
 	new_lwt->esp = new_lwt->ebp;
 	
-	__lwt_rq_inqueue(new_lwt);
+	__lwt_q_inqueue(&__run_q, new_lwt);
 	
 	__lwt_info.num_runnable++;
 	
@@ -654,19 +588,19 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 void lwt_yield(lwt_t target)
 {
 	// Only one thread running
-	if (__lwt_rq_head == __lwt_rq_tail)
+	if (__run_q.head == __run_q.tail)
 		return;
 	
-	if (target == __lwt_rq_head)
+	if (target == __run_q.head)
 		return;
 	
 	lwt_t next_lwt;
-	lwt_t current_lwt = __lwt_rq_dequeue();
+	lwt_t current_lwt = __lwt_q_next(&__run_q);
 
 	if (target)
-		__lwt_rq_queue_jmp(target);
+		__lwt_q_queue_jmp(&__run_q, target);
 
-	next_lwt = __lwt_rq_head;
+	next_lwt = __run_q.head;
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
@@ -707,7 +641,7 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 void lwt_die(void *data)
 {
 	// head always points to the current thread
-	lwt_t lwt_finished = __lwt_rq_remove_head();
+	lwt_t lwt_finished = __lwt_q_dequeue(&__run_q);
 	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
 
@@ -719,7 +653,7 @@ void lwt_die(void *data)
 	__lwt_info.num_runnable--;
 	
 	// switch to the next available thread
-	__lwt_dispatch(__lwt_rq_head, lwt_finished);
+	__lwt_dispatch(__run_q.head, lwt_finished);
 }
 
 /**
@@ -727,7 +661,7 @@ void lwt_die(void *data)
  */
 lwt_t lwt_current()
 {
-	return __lwt_rq_head;
+	return __run_q.head;
 }
 
 /**
