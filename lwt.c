@@ -291,14 +291,16 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 								  "movl 0x4(%%ebx), %%esp \n\t"					// %esp = next->esp
 
 								  // Pass function call parameters via stack
-								  "sub $0x20, %%esp \n\t"						// allocate stack space for calling __lwt_start
+								  "sub $0x40, %%esp \n\t"						// allocate stack space for calling __lwt_start
 								  "leal %c[entry_fn_param](%0), %%ebx \n\t"		// %%ebx = &next->entry_fn_param
 								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn_param
 								  "movl %%ebx, 0x8(%%esp) \n\t"					// push %%ebx
 								  "leal %c[entry_fn](%0), %%ebx \n\t"			// %%ebx = &next->entry_fn
 								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn
 								  "movl %%ebx, 0x4(%%esp) \n\t"					// push %%ebx
-								  "leal lwt_die, %%ebx \n\t"					// %%ebx = &lwt_die
+								  
+								  // Set the returning address of __lwt_start() to lwt_die()
+								  "leal lwt_die, %%ebx \n\t"					// %%ebx = lwt_die
 								  "movl %%ebx, (%%esp) \n\t"					// push %%ebx
 								  
 								  // Jumps to __lwt_trampoline, which will call __lwt_start.
@@ -381,11 +383,30 @@ static void __lwt_main_thread_init()
 
 /**
  Thread entry, called by __lwt_trampoline in assembly
+ This function will return to lwt_die() implicitly.
  */
 void __lwt_start(lwt_fn_t fn, void* data)
 {
 	void* ret = fn(data);
-	lwt_die(ret);
+	
+	// prepare to return to lwt_die()
+	__asm__ __volatile__ (
+						  // 0x4(%ebp) is the returning address of __lwt_start(), currently pointing to lwt_die()
+						  // 0x8(%ebp) will be the returning address of lwt_die()
+						  // 0xc(%ebp) will be the address of the first parameter used by lwt_die()
+						  "leal (%0), %%ebx \n\t"				// %ebx = ret
+						  "movl %%ebx, 0xc(%%ebp) \n\t"			// 0xc(%ebp) = ret
+						  :
+						  : "r" (ret)
+						  :
+						  );
+	/* +------------------------------------------------------------+ */
+	/* | !! Attention !!											| */
+	/* +------------------------------------------------------------+ */
+	/* |  Now jump to lwt_die() implicitly.							| */
+	/* |  The compiler does this amazing thing for us 				| */
+	/* |  automatically! :D											| */
+	/* +------------------------------------------------------------+ */
 }
 
 /*--------------------------------------------------*
