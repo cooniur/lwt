@@ -1,3 +1,11 @@
+//
+//  lwt.c
+//  lwt
+//
+//  Created by Tongliang Liu on 10/17/13.
+//  Copyright (c) 2013 cooniur. All rights reserved.
+//
+
 #ifndef lwt_h
 #define lwt_h
 

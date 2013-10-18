@@ -1,3 +1,11 @@
+//
+//  lwt-const.h
+//  lwt
+//
+//  Created by Tongliang Liu on 10/17/13.
+//  Copyright (c) 2013 cooniur. All rights reserved.
+//
+
 #ifndef lwt_const_h
 #define lwt_const_h
 
