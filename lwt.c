@@ -34,6 +34,21 @@ enum __lwt_status_t__
 struct __lwt_t__
 {
 	/**
+	 Stack Base Pointer
+	 */
+	void* ebp;
+	
+	/**
+	 Stack Pointer
+	 */
+	void* esp;
+	
+	/**
+	 Instruction Pointer
+	 */
+	void* eip;
+
+	/**
 	 Thread ID
 	 */
 	unsigned int id;
@@ -54,20 +69,10 @@ struct __lwt_t__
 	void* stack;
 
 	/**
-	 Stack Base Pointer
-	 */
-	void* ebp;
-	
-	/**
-	 Stack Pointer
-	 */
-	void* esp;
-
-	/**
 	 Points to the next thread descriptor
 	 */
 	struct __lwt_t__ *next;
-};
+} __attribute__ ((aligned (16), packed));
 
 /*==================================================*
  *													*
@@ -77,8 +82,8 @@ struct __lwt_t__
 /**
  The Run Queue
  */
-lwt_t lwt_rq_head = NULL;
-lwt_t lwt_rq_tail = NULL;
+lwt_t __lwt_rq_head = NULL;
+lwt_t __lwt_rq_tail = NULL;
 
 lwt_t __current;
 lwt_t __main_thread = NULL;
@@ -93,18 +98,19 @@ int __lwt_threadid = 0;
 
 extern void __lwt_trampoline(lwt_fn_t fn, void* data);		//   __lwt_trampoline calls __lwt_start (in assembly)
 void __lwt_start(lwt_fn_t fn, void* data);
-void __lwt_scheduler();
 
+static void __lwt_main_thread_init();
 
-int __lwt_rq_empty();
-void __lwt_rq_inqueue(lwt_t new_lwt);
-lwt_t __lwt_rq_dequeue();
-lwt_t __lwt_rq_remove_head();
+static int __lwt_rq_empty();
+static void __lwt_rq_inqueue(lwt_t new_lwt);
+static lwt_t __lwt_rq_dequeue();
+static lwt_t __lwt_rq_remove_head();
 
 
 void __attribute__ ((always_inline)) __lwt_save_stack_to(lwt_t lwt);
 void __attribute__ ((always_inline)) __lwt_load_stack_from(lwt_t lwt);
-void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current);
+static inline void __lwt_dispatch(lwt_t next, lwt_t current);
+//void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current);
 
 /*==================================================*
  *													*
@@ -114,55 +120,61 @@ void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current);
 
 /*--------------------------------------------------*
  *													*
+ *	Static functions								*
+ *													*
+ *--------------------------------------------------*/
+
+/*--------------------------------------------------*
+ *													*
  *	Run Queue functions								*
  *													*
  *--------------------------------------------------*/
-int __lwt_rq_empty()
+static int __lwt_rq_empty()
 {
-	if (!lwt_rq_head && !lwt_rq_tail)
+	if (!__lwt_rq_head && !__lwt_rq_tail)
 		return 1;
 	else
 		return 0;
 }
 
-void __lwt_rq_inqueue(lwt_t new_lwt)
+static void __lwt_rq_inqueue(lwt_t new_lwt)
 {
 	if (__lwt_rq_empty())
 	{
 		new_lwt->next = new_lwt;
-		lwt_rq_head = new_lwt;
-		lwt_rq_tail = new_lwt;
+		__lwt_rq_head = new_lwt;
+		__lwt_rq_tail = new_lwt;
 	}
 	else
 	{
-		lwt_rq_tail->next = new_lwt;
-		lwt_rq_tail = new_lwt;
-		lwt_rq_tail->next = lwt_rq_head;
+		__lwt_rq_tail->next = new_lwt;
+		__lwt_rq_tail = new_lwt;
+		__lwt_rq_tail->next = __lwt_rq_head;
 	}
 }
 
-lwt_t __lwt_rq_dequeue()
+static lwt_t __lwt_rq_dequeue()
 {
 	if (__lwt_rq_empty())
 		return NULL;
 	
-	lwt_t ret = lwt_rq_head;
+	lwt_t ret = __lwt_rq_head;
 	
-	lwt_rq_head = lwt_rq_head->next;
-	lwt_rq_tail = lwt_rq_tail->next;
+	__lwt_rq_head = __lwt_rq_head->next;
+	__lwt_rq_tail = __lwt_rq_tail->next;
 	
 	return ret;
 }
 
-lwt_t __lwt_rq_remove_head()
+static lwt_t __lwt_rq_remove_head()
 {
 	if (__lwt_rq_empty())
 		return NULL;
 	
-	lwt_t ret = lwt_rq_head;
+	lwt_t ret = __lwt_rq_head;
 	
-	lwt_rq_tail->next = lwt_rq_head->next;
-	lwt_rq_head = lwt_rq_head->next;
+	__lwt_rq_tail->next = __lwt_rq_head->next;
+	__lwt_rq_head = __lwt_rq_head->next;
 	
 	return ret;
 }
@@ -172,40 +184,33 @@ lwt_t __lwt_rq_remove_head()
  *	Scheduler functions								*
  *													*
  *--------------------------------------------------*/
-/**
- Save stack (%esp, %ebp) to a TCB (i.e. lwt_t)
- */
-void __attribute__ ((always_inline)) __lwt_load_stack_from(lwt_t lwt)
+static inline void __lwt_dispatch(lwt_t next, lwt_t current)
 {
 	__asm__ __volatile__ (
-		"movl %c[esp](%0), %%esp \n\t"
-		"movl %c[ebp](%0), %%ebp \n\t"
-		: 
-		: "r" (lwt),
-			LWT_STRUCT_OFFSET(esp),
-			LWT_STRUCT_OFFSET(ebp)
-		:
-	);
-}
+						  "pushal \n\t"								// push all registers to stack
+						  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &current->ebp
+						  "movl %%ebp, (%%ebx) \n\t"				// current->ebp = %ebp
+						  "movl %%esp, 0x4(%%ebx) \n\t"				// current->esp = %esp
+//						  "movl 0x4(%%ebp), %%ecx \n\t"				// %ecx = %ebp + 0x4 (puts returning address of __lwt_dispatch to %ecx)
+//						  "movl %%ecx, 0x8(%%ebx) \n\t"			// current->eip = %ecx
+						  :
+						  : "r" (current),
+							LWT_STRUCT_OFFSET(ebp)
+						  :
+						  );
 
-/**
- Load stack (%esp, %ebp) from a TCB (i.e. lwt_t)
- */
-void __attribute__ ((always_inline)) __lwt_save_stack_to(lwt_t lwt)
-{
 	__asm__ __volatile__ (
-		"movl %%esp, %c[esp](%0) \n\t"
-		"movl %%ebp, %c[ebp](%0) \n\t"
-		: 
-		: "r" (lwt),
-			LWT_STRUCT_OFFSET(esp),
-			LWT_STRUCT_OFFSET(ebp)
-		:
-	);
-}
+						  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
+						  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
+						  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
+						  "popal \n\t"								// pop all registers from stack
+						  :
+						  : "r" (next),
+						  LWT_STRUCT_OFFSET(ebp)
+						  :
+						  );
 
-void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current)
-{
+/*
 	__asm__ __volatile__ (
 		"pushal \n\t"
 	);
@@ -222,17 +227,19 @@ void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current)
 	{
 		__lwt_load_stack_from(next);
 	}
+ */
 }
 
-void test_inline_as(lwt_t lwt)
-{
-		
-}
+/*--------------------------------------------------*
+ *													*
+ *	Entry functions									*
+ *													*
+ *--------------------------------------------------*/
 
 /**
- Save main thread information (i.e. where the main() function is)
+ Puts the main thread into the run queue
  */
-void __lwt_main_thread_init()
+static void __lwt_main_thread_init()
 {
 	if (__main_thread)
 		return;
@@ -241,35 +248,66 @@ void __lwt_main_thread_init()
 	__main_thread->id = 0;
 	__main_thread->status = LWT_S_RUNNING;
 	__main_thread->stack = NULL;
-	
 	__main_thread->next = NULL;
-	__lwt_save_stack_to(__main_thread);
+	
+	__lwt_rq_inqueue(__main_thread);
 }
+
+/**
+ Thread entry
+ */
+void __lwt_start(lwt_fn_t fn, void* data)
+{
+	fn(data);
+}
+
+
+/*--------------------------------------------------*
+ *													*
+ *	Public functions								*
+ *													*
+ *--------------------------------------------------*/
 
 lwt_t lwt_create(lwt_fn_t fn, void *data)
 {
 	__lwt_main_thread_init();
 	
 	// creates tcb
-	lwt_t lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
+	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
 
 	// creates stack
-	lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
-	lwt->stack = malloc(sizeof(void) * lwt->stack_size);
-	lwt->ebp = lwt->stack + lwt->stack_size;
-	lwt->esp = lwt->ebp;
-	lwt->next = NULL;
-	lwt->id = __lwt_threadid++;
-	lwt->status = LWT_S_READY;
-
-	__lwt_dispatch(__main_thread, __main_thread);
+	new_lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
+	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
+	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
+	new_lwt->esp = new_lwt->ebp;
+	new_lwt->next = NULL;
+	new_lwt->id = __lwt_threadid++;
+	new_lwt->status = LWT_S_READY;
 	
-	__lwt_start(fn, data);
+	__lwt_rq_inqueue(new_lwt);
 	
-	return lwt;
+	return new_lwt;
 }
 
-void __lwt_start(lwt_fn_t fn, void* data)
+void lwt_yield()
 {
-	fn(data);
+	// Only one thread running
+	if (__lwt_rq_head == __lwt_rq_tail)
+		return;
+	
+//	lwt_t current_lwt = __lwt_rq_head;
+//	lwt_t next_lwt = __lwt_rq_dequeue();
+//	
+//	__lwt_dispatch(next_lwt, current_lwt);
+	
+	__lwt_dispatch(__main_thread, __main_thread);
 }
+
+void* lwt_join(lwt_t lwt)
+{
+	int *p = (int*)malloc(sizeof(int));
+	*p = 0xF4;
+	return p;
+}
+
+

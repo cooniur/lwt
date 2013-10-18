@@ -15,6 +15,10 @@ typedef enum __lwt_status_t__ lwt_status_t;
 
 lwt_t lwt_create(lwt_fn_t fn, void *data);
 
+void lwt_yield();
+void* lwt_join(lwt_t lwt);
+
+
 void test_inline_as(lwt_t lwt);
 
 #endif
