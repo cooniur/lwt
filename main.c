@@ -10,6 +10,20 @@
 #include <stdio.h>
 #include "lwt.h"
 
+void show_return_value(lwt_t lwt_to_join)
+{
+	void *data = NULL;
+	lwt_t lwt_cur = lwt_current();
+	if (lwt_join(lwt_to_join, &data) == 0)
+	{
+		if (data)
+		{
+			printf("%d joined thread %d, return value is %d\n", lwt_id(lwt_cur), lwt_id(lwt_to_join), *((int*)data));
+			free(data);
+		}
+	}
+}
+
 void* run(void *data)
 {
 	int *ret = (int*)malloc(sizeof(int));
@@ -28,7 +42,7 @@ void* run(void *data)
 	printf(" with param %d.\n", count);
 	for (i=0; i<count; i++)
 	{
-		if (i > 10)
+		if (i > 40)
 		{
 			printf("--> #%d running: Thread will die...\n", id);
 			*ret = -2;
@@ -88,6 +102,11 @@ void* run_3(void *data)
 		printf(" with NULL data.\n");
 		return NULL;
 	}
+
+	int *param = (int*)malloc(sizeof(int));
+	*param = 100;
+	lwt_t lwt= lwt_create(run, param);
+	show_return_value(lwt);
 	
 	int i;
 	int count = *((int*)data);
@@ -110,19 +129,6 @@ void* run_3(void *data)
 	
 }
 
-void show_return_value(lwt_t lwt_to_join)
-{
-	void *data = NULL;
-	if (lwt_join(lwt_to_join, &data) == 0)
-	{
-		if (data)
-		{
-			printf("Main: joined thread %d, return value is %d\n", lwt_id(lwt_to_join), *((int*)data));
-			free(data);
-		}
-	}
-}
-
 int main(int argc, char *argv[])
 {
 	int a = 10;
@@ -133,7 +139,7 @@ int main(int argc, char *argv[])
 	lwt_t lwt3 = lwt_create(run_3, &c);
 
 	int count = 0;
-	while(count < 20)
+	while(count < 110)
 	{
 		printf("Main: [%d]\n", count++);
 		lwt_yield();	// should jump to the new thread we just created.
