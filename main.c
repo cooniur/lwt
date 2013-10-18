@@ -1,46 +1,147 @@
+//
+//  main.c
+//  lwt
+//
+//  Created by cooniur on 10/17/13.
+//  Copyright (c) 2013 cooniur. All rights reserved.
+//
+
 #include <stdlib.h>
 #include <stdio.h>
-#include "lwt-test.h"
 #include "lwt.h"
 
-void *run(void* data)
+void* run(void *data)
 {
-	if (data != NULL)
+	int *ret = (int*)malloc(sizeof(int));
+	*ret = -1;
+	lwt_t cur = lwt_current();
+	int id = lwt_id(cur);
+	printf("--> #%d begins to run", id);
+	if (data == NULL)
 	{
-		int i = 10;
-		int count = *((int*)data);
-		for (i=0; i<count; i++)
-		{
-			if (i > 3)
-				lwt_die(NULL);
+		printf(" with NULL data.\n");
+		return NULL;
+	}
 
-			printf("--> run: loop #%d\n", i);
-			lwt_yield();
+	int i;
+	int count = *((int*)data);
+	printf(" with param %d.\n", count);
+	for (i=0; i<count; i++)
+	{
+		if (i > 10)
+		{
+			printf("--> #%d running: Thread will die...\n", id);
+			*ret = -2;
+			lwt_die(ret);
+		}
+		
+		printf("--> #%d running: [%d]\n", id, i);
+		lwt_yield();
+	}
+	
+	printf("--> #%d finished.\n", id);
+	return ret;
+}
+
+void* run_2(void *data)
+{
+	int *ret = (int*)malloc(sizeof(int));
+	*ret = -1;
+	lwt_t cur = lwt_current();
+	int id = lwt_id(cur);
+	printf("--> #%d begins to run", id);
+	if (data == NULL)
+	{
+		printf(" with NULL data.\n");
+		return NULL;
+	}
+	
+	int i;
+	int count = *((int*)data);
+	printf(" with param %d.\n", count);
+	for (i=0; i<count; i+=2)
+	{
+		if (i > 10)
+		{
+			printf("--> #%d running: Thread will die...\n", id);
+			*ret = -2;
+			lwt_die(ret);
+		}
+		
+		printf("--> #%d running: [%d]\n", id, i);
+		lwt_yield();
+	}
+	
+	printf("--> #%d finished.\n", id);
+	return ret;
+}
+
+void* run_3(void *data)
+{
+	int *ret = (int*)malloc(sizeof(int));
+	*ret = -1;
+	lwt_t cur = lwt_current();
+	int id = lwt_id(cur);
+	printf("--> #%d begins to run", id);
+	if (data == NULL)
+	{
+		printf(" with NULL data.\n");
+		return NULL;
+	}
+	
+	int i;
+	int count = *((int*)data);
+	printf(" with param %d.\n", count);
+	for (i=0; i<count; i+=3)
+	{
+		if (i > 10)
+		{
+			printf("--> #%d running: Thread will die...\n", id);
+			*ret = -2;
+			lwt_die(ret);
+		}
+		
+		printf("--> #%d running: [%d]\n", id, i);
+		lwt_yield();
+	}
+	
+	printf("--> #%d finished.\n", id);
+	return ret;
+	
+}
+
+void show_return_value(lwt_t lwt_to_join)
+{
+	void *data = NULL;
+	if (lwt_join(lwt_to_join, &data) == 0)
+	{
+		if (data)
+		{
+			printf("Main: joined thread %d, return value is %d\n", lwt_id(lwt_to_join), *((int*)data));
+			free(data);
 		}
 	}
-	return NULL;
 }
 
 int main(int argc, char *argv[])
 {
-	int p = 10;
-//	lwt_fn_t fn = run;
-//	fn(&p);
-	
-	lwt_t lwt = lwt_create(run, &p);
+	int a = 10;
+	lwt_t lwt = lwt_create(run, &a);
+	int b = 20;
+	lwt_t lwt2 = lwt_create(run_2, &b);
+	int c = 33;
+	lwt_t lwt3 = lwt_create(run_3, &c);
+
 	int count = 0;
 	while(count < 20)
 	{
-		printf("Main: loop #%d\n", count++);
+		printf("Main: [%d]\n", count++);
 		lwt_yield();	// should jump to the new thread we just created.
+		
+		show_return_value(lwt);
+		show_return_value(lwt3);
 	}
-	
 
-//	printf("0x%X\n", p);
-//	
-//	void* ptr = lwt_join(lwt);
-//	p = *((unsigned int*)ptr);
-//	printf("0x%X\n", p);
-
+	show_return_value(lwt2);
 	return 0;
 }

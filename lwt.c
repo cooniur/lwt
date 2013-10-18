@@ -2,7 +2,7 @@
 //  lwt.c
 //  lwt
 //
-//  Created by Tongliang Liu on 10/17/13.
+//  Created by cooniur on 10/17/13.
 //  Copyright (c) 2013 cooniur. All rights reserved.
 //
 
@@ -12,16 +12,22 @@
 #include <assert.h>
 
 #include "lwt.h"
-#include "lwt-test.h"
-#include "lwt-const.h"
 
 /*==================================================*
  *													*
  *				Useful Marcos						*
  *													*
  *==================================================*/
+/**
+ Gets the offset of a field inside a struc
+ */
 #define LWT_STRUCT_OFFSET(Field) \
 	[Field] "i" (offsetof(struct __lwt_t__, Field))
+
+/**
+ Default size of the stack used by a lwt thread
+ */
+#define DEFAULT_LWT_STACK_SIZE	(1024 * 16)
 
 /*==================================================*
  *													*
@@ -36,7 +42,8 @@ enum __lwt_status_t__
 	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
 	LWT_S_READY,			// Thread is switched out, and ready to be switched to
 	LWT_S_RUNNING,			// Thread is running
-	LWT_S_DEAD				// Thread called lwt_die(), and is dead. Ready to be joined.
+	LWT_S_JOINABLE,			// Thread is finished and is ready to be joined
+	LWT_S_DEAD				// Thread is joined and finally dead.
 };
 
 /**
@@ -53,11 +60,6 @@ struct __lwt_t__
 	 Stack Pointer
 	 */
 	void* esp;
-	
-	/**
-	 Instruction Pointer
-	 */
-	void* eip;
 	
 	/**
 	 Thread Entry Function Pointer
@@ -77,7 +79,7 @@ struct __lwt_t__
 	/**
 	 Thread ID
 	 */
-	unsigned int id;
+	int id;
 	
 	/**
 	 Thread status
@@ -107,14 +109,20 @@ struct __lwt_t__
  *==================================================*/
 /**
  The Run Queue
+ __lwt_rq_head always points to the current thread
  */
 lwt_t __lwt_rq_head = NULL;
 lwt_t __lwt_rq_tail = NULL;
 
-lwt_t __current;
+/**
+ The main thread TCB
+ */
 lwt_t __main_thread = NULL;
 
-unsigned int __lwt_threadid = 1;
+/**
+ Stores the next available thread id #
+ */
+int __lwt_threadid = 1;
 
 /*==================================================*
  *													*
@@ -122,19 +130,22 @@ unsigned int __lwt_threadid = 1;
  *													*
  *==================================================*/
 
-extern void __lwt_trampoline(lwt_fn_t fn, void* data);		//   __lwt_trampoline calls __lwt_start (in assembly)
-void* __lwt_start(lwt_fn_t fn, void* data);
+/**
+ A new thread's entry point
+ Calls __lwt_start (in assembly)
+ */
+extern void __lwt_trampoline(lwt_fn_t fn, void* data);
+void __lwt_start(lwt_fn_t fn, void* data);
 
-unsigned int __lwt_get_next_threadid();
+static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current);
+
+static int __lwt_get_next_threadid();
 static void __lwt_main_thread_init();
 
 static int __lwt_rq_empty();
 static void __lwt_rq_inqueue(lwt_t new_lwt);
 static lwt_t __lwt_rq_dequeue();
 static lwt_t __lwt_rq_remove_head();
-
-static void __lwt_dispatch(lwt_t next, lwt_t current);
-//void __attribute__ ((always_inline)) __lwt_dispatch(lwt_t next, lwt_t current);
 
 /*==================================================*
  *													*
@@ -148,7 +159,10 @@ static void __lwt_dispatch(lwt_t next, lwt_t current);
  *													*
  *--------------------------------------------------*/
 
-unsigned int __lwt_get_next_threadid()
+/**
+ Gets the next available thread id #
+ */
+static int __lwt_get_next_threadid()
 {
 	return __lwt_threadid++;
 }
@@ -159,7 +173,7 @@ unsigned int __lwt_get_next_threadid()
  *													*
  *--------------------------------------------------*/
 /**
- Returns 1 if the run queue is empty.
+ Returns 1 if the run queue is empty; otherwise, 0
  */
 static int __lwt_rq_empty()
 {
@@ -228,15 +242,22 @@ static lwt_t __lwt_rq_remove_head()
  *	Scheduler functions								*
  *													*
  *--------------------------------------------------*/
+/**
+ Switches from the "current" thread to the "next" thread
+ Must be noinline function
+ */
+__attribute__ ((noinline))
 static void __lwt_dispatch(lwt_t next, lwt_t current)
 {
 	if (next->status != LWT_S_CREATED && next->status != LWT_S_READY)
 		return;
 
-	if (current->status != LWT_S_RUNNING && current->status != LWT_S_DEAD)
+	if (current->status != LWT_S_RUNNING && current->status != LWT_S_JOINABLE && current->status != LWT_S_DEAD)
 		return;
-		
-	switch (current->status) {
+	
+	switch (current->status)
+	{
+			// Current thread is running
 		case LWT_S_RUNNING:
 			current->status = LWT_S_READY;
 			__asm__ __volatile__ (
@@ -253,10 +274,14 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 								  :
 								  );
 			break;
+			// Does nothing but to surpress the warnings.
+		default:
+			break;
 	}
 
-	switch (next->status) {
-			// Thread is just created, call __lwt_trampoline
+	switch (next->status)
+	{
+			// The next thread is just created, call __lwt_trampoline
 		case LWT_S_CREATED:
 			next->status = LWT_S_RUNNING;
 			__asm__ __volatile__ (
@@ -276,8 +301,9 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 								  "leal lwt_die, %%ebx \n\t"					// %%ebx = &lwt_die
 								  "movl %%ebx, (%%esp) \n\t"					// push %%ebx
 								  
-								  // Jumps to __lwt_trampoline, which will call __lwt_start
-								  "jmp __lwt_trampoline \n\t"					// start the new thread
+								  // Jumps to __lwt_trampoline, which will call __lwt_start.
+								  // The returning address of __lwt_start is lwt_die()
+								  "jmp __lwt_trampoline \n\t"
 								  :
 								  : "r" (next),
 									LWT_STRUCT_OFFSET(ebp),
@@ -285,11 +311,20 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 									LWT_STRUCT_OFFSET(entry_fn_param)
 								  :
 								  );
+			/* +------------------------------------------------------------+ */
+			/* | !! Attention !!											| */
+			/* +------------------------------------------------------------+ */
+			/* |  The function parameters can NOT be accessed here,			| */
+			/* |  because they were stored on the "current" thread's stack,	| */
+			/* |  but now we have switched to the "next" thread's stack.	| */
+			/* +------------------------------------------------------------+ */
 			break;
 		
+			// The next thread is ready to be resumed
 		case LWT_S_READY:
 			next->status = LWT_S_RUNNING;
 			__asm__ __volatile__ (
+								  // Restore stack pointer and base pointer
 								  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
 								  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
 								  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
@@ -299,8 +334,26 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 								  LWT_STRUCT_OFFSET(ebp)
 								  :
 								  );
+			/* +------------------------------------------------------------+ */
+			/* | !! Attention !!											| */
+			/* +------------------------------------------------------------+ */
+			/* |  The function parameters can NOT be accessed here,			| */
+			/* |  because they were stored on the "current" thread's stack,	| */
+			/* |  but now we have switched to the "next" thread's stack.	| */
+			/* +------------------------------------------------------------+ */
+			break;
+			// Does nothing but to surpress the warnings.
+		default:
 			break;
 	}
+
+	/* +------------------------------------------------------------+ */
+	/* | !! Attention !!											| */
+	/* +------------------------------------------------------------+ */
+	/* |  The function parameters can NOT be accessed here,			| */
+	/* |  because they were stored on the "current" thread's stack,	| */
+	/* |  but now we have switched to the "next" thread's stack.	| */
+	/* +------------------------------------------------------------+ */
 }
 
 /*--------------------------------------------------*
@@ -327,13 +380,13 @@ static void __lwt_main_thread_init()
 }
 
 /**
- Thread entry
+ Thread entry, called by __lwt_trampoline in assembly
  */
-void* __lwt_start(lwt_fn_t fn, void* data)
+void __lwt_start(lwt_fn_t fn, void* data)
 {
-	return fn(data);
+	void* ret = fn(data);
+	lwt_die(ret);
 }
-
 
 /*--------------------------------------------------*
  *													*
@@ -341,6 +394,11 @@ void* __lwt_start(lwt_fn_t fn, void* data)
  *													*
  *--------------------------------------------------*/
 
+/**
+ Creates a lwt thread, with the entry function pointer fn,
+ and the parameter pointer data used by fn
+ Returns lwt_t type
+ */
 lwt_t lwt_create(lwt_fn_t fn, void *data)
 {
 	__lwt_main_thread_init();
@@ -365,6 +423,9 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	return new_lwt;
 }
 
+/**
+ Yields to the next available thread
+ */
 void lwt_yield()
 {
 	// Only one thread running
@@ -377,17 +438,65 @@ void lwt_yield()
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
-void* lwt_join(lwt_t lwt)
+/**
+ Joins a specified thread and waits for its termination.
+ The pointer to the returned value will be passed via retval_ptr
+ Returns -1 if fails to join; otherwise, 0
+ */
+int lwt_join(lwt_t lwt, void **retval_ptr)
 {
-	int *p = (int*)malloc(sizeof(int));
-	*p = 0xF4;
-	return p;
+	if (lwt->status == LWT_S_DEAD)
+		return -1;
+	
+	// Spinning until the joining thread finishes.
+	while(lwt->status != LWT_S_JOINABLE)
+		lwt_yield();
+	
+	lwt->status = LWT_S_DEAD;
+	*retval_ptr = lwt->return_val;
+	free(lwt);
+	return 0;
 }
 
+/**
+ Kill the current thread.
+ Return value is passed by data
+ */
 void lwt_die(void *data)
 {
-	lwt_t lwt_dead = __lwt_rq_remove_head();
-	lwt_dead->status = LWT_S_DEAD;
+	// head always points to the current thread
+	lwt_t lwt_finished = __lwt_rq_remove_head();
+	lwt_finished->status = LWT_S_JOINABLE;
+	lwt_finished->return_val = data;
 
-	__lwt_dispatch(__lwt_rq_head, lwt_dead);
+	lwt_finished->next = NULL;
+	lwt_finished->entry_fn = NULL;
+	lwt_finished->entry_fn_param = NULL;
+
+	// release the thread's stack
+	free(lwt_finished->stack);
+	lwt_finished->stack = lwt_finished->ebp = lwt_finished->esp = NULL;
+
+	// switch to the next available thread
+	__lwt_dispatch(__lwt_rq_head, lwt_finished);
+}
+
+/**
+ Gets the current thread lwt_t
+ */
+lwt_t lwt_current()
+{
+	return __lwt_rq_head;
+}
+
+/**
+ Gets the thread id of a specified thread.
+ Returns -1 if the thread not exists
+ */
+int lwt_id(lwt_t lwt)
+{
+	if (!lwt)
+		return -1;
+	
+	return lwt->id;
 }
