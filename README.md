@@ -1,4 +1,4 @@
 lwt
 ===
 
-Light-weighted Thread Library
+Light-Weighted Thread Library
