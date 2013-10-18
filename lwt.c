@@ -23,9 +23,10 @@
  */
 enum __lwt_status_t__
 {
-	LWT_S_READY = 0,
-	LWT_S_RUNNING,
-	LWT_S_DEAD
+	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
+	LWT_S_READY,			// Thread is switched out, and ready to be switched to
+	LWT_S_RUNNING,			// Thread is running
+	LWT_S_DEAD				// Thread called lwt_die(), and is dead. Ready to be joined.
 } __lwt_status_t__;
 
 /**
@@ -88,7 +89,7 @@ lwt_t __lwt_rq_tail = NULL;
 lwt_t __current;
 lwt_t __main_thread = NULL;
 
-int __lwt_threadid = 0;
+unsigned int __lwt_threadid = 1;
 
 /*==================================================*
  *													*
@@ -99,6 +100,7 @@ int __lwt_threadid = 0;
 extern void __lwt_trampoline(lwt_fn_t fn, void* data);		//   __lwt_trampoline calls __lwt_start (in assembly)
 void __lwt_start(lwt_fn_t fn, void* data);
 
+unsigned int __lwt_get_next_threadid();
 static void __lwt_main_thread_init();
 
 static int __lwt_rq_empty();
@@ -123,6 +125,11 @@ static inline void __lwt_dispatch(lwt_t next, lwt_t current);
  *	Static functions								*
  *													*
  *--------------------------------------------------*/
+
+unsigned int __lwt_get_next_threadid()
+{
+	return __lwt_threadid++;
+}
 
 /*--------------------------------------------------*
  *													*
@@ -209,25 +216,6 @@ static inline void __lwt_dispatch(lwt_t next, lwt_t current)
 						  LWT_STRUCT_OFFSET(ebp)
 						  :
 						  );
-
-/*
-	__asm__ __volatile__ (
-		"pushal \n\t"
-	);
-
-	__lwt_save_stack_to(current);
-	if (next->status == LWT_S_RUNNING)
-	{
-		__lwt_load_stack_from(next);
-		__asm__ __volatile__ (
-			"popal \n\t"
-		);
-	}
-	else
-	{
-		__lwt_load_stack_from(next);
-	}
- */
 }
 
 /*--------------------------------------------------*
@@ -274,15 +262,15 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	
 	// creates tcb
 	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
+	new_lwt->id = __lwt_get_next_threadid();
+	new_lwt->status = LWT_S_CREATED;
+	new_lwt->next = NULL;
 
 	// creates stack
 	new_lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
 	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
 	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
 	new_lwt->esp = new_lwt->ebp;
-	new_lwt->next = NULL;
-	new_lwt->id = __lwt_threadid++;
-	new_lwt->status = LWT_S_READY;
 	
 	__lwt_rq_inqueue(new_lwt);
 	
