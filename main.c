@@ -19,5 +19,12 @@ int main(int argc, char *argv[])
 	int p = 0xAA;
 	lwt_t lwt = lwt_create(run, &p);
 	
+	lwt_yield();	// should jump to the new thread we just created.
+	printf("0x%X\n", p);
+	
+	void* ptr = lwt_join(lwt);
+	p = *((unsigned int*)ptr);
+	printf("0x%X\n", p);
+
 	return 0;
 }
