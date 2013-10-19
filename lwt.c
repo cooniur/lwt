@@ -42,7 +42,7 @@ enum __lwt_status_t__
 	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
 	LWT_S_READY,			// Thread is switched out, and ready to be switched to
 	LWT_S_RUNNING,			// Thread is running
-	LWT_S_JOINABLE,			// Thread is finished and is ready to be joined
+	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
 	LWT_S_DEAD				// Thread is joined and finally dead.
 };
 
@@ -252,7 +252,7 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 	if (next->status != LWT_S_CREATED && next->status != LWT_S_READY)
 		return;
 
-	if (current->status != LWT_S_RUNNING && current->status != LWT_S_JOINABLE && current->status != LWT_S_DEAD)
+	if (current->status != LWT_S_RUNNING && current->status != LWT_S_FINISHED && current->status != LWT_S_DEAD)
 		return;
 	
 	switch (current->status)
@@ -274,6 +274,8 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 								  :
 								  );
 			break;
+		case LWT_S_FINISHED:
+			
 			// Does nothing but to surpress the warnings.
 		default:
 			break;
@@ -470,7 +472,7 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 		return -1;
 	
 	// Spinning until the joining thread finishes.
-	while(lwt->status != LWT_S_JOINABLE)
+	while(lwt->status != LWT_S_FINISHED)
 		lwt_yield();
 	
 	lwt->status = LWT_S_DEAD;
@@ -487,7 +489,7 @@ void lwt_die(void *data)
 {
 	// head always points to the current thread
 	lwt_t lwt_finished = __lwt_rq_remove_head();
-	lwt_finished->status = LWT_S_JOINABLE;
+	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
 
 	lwt_finished->next = NULL;
