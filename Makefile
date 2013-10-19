@@ -1,6 +1,6 @@
 COBJS		= main.o lwt.o
-CFLAGS		= -O3 -I. -Wall -Wextra
-#CFLAGS		= -g -I. -Wall -Wextra
+#CFLAGS		= -O3 -I. -Wall -Wextra
+CFLAGS		= -g -I. -Wall -Wextra
 CC			= gcc
 
 AOBJS		= lwt_trampoline.o
@@ -8,8 +8,8 @@ AFLAGS		=
 AS			= gcc
 
 BIN			= test
-BFLAGS		= -O3 -I. -Wall -Wextra
-#BFLAGS		= -g -I. -Wall -Wextra
+#BFLAGS		= -O3 -I. -Wall -Wextra
+BFLAGS		= -g -I. -Wall -Wextra
 LD			= ld
 
 all: $(BIN)

@@ -53,53 +53,64 @@ struct __lwt_t__
 {
 	/**
 	 Stack Base Pointer
+	 Offset: 0x0
 	 */
 	void* ebp;
 	
 	/**
 	 Stack Pointer
+	 Offset: 0x4
 	 */
 	void* esp;
 	
 	/**
 	 Thread Entry Function Pointer
+	 Offset: 0x8
 	 */
 	lwt_fn_t entry_fn;
 	
 	/**
 	 Thread Entry Function Parameter Pointer
+	 Offset: 0xc
 	 */
 	void* entry_fn_param;
 
 	/**
 	 Thread Return Value Pointer
+	 Offset: 0x10
 	 */
 	void* return_val;
 	
 	/**
-	 Thread ID
-	 */
-	int id;
-	
-	/**
 	 Thread status
+	 Offset: 0x14
 	 */
 	lwt_status_t status;
-	 
-	/**
-	 Stack Size
-	 */
-	size_t stack_size;
 
 	/**
 	 Stack Memory Pointer by malloc
+	 Offset: 0x18
 	 */
 	void* stack;
 
 	/**
+	 Thread ID
+	 Offset: 0x1c
+	 */
+	int id;
+	
+	/**
+	 Stack Size
+	 Offset: 0x20
+	 */
+	size_t stack_size;
+
+	/**
 	 Points to the next thread descriptor
+	 Offset: 0x24
 	 */
 	struct __lwt_t__ *next;
+	
 } __attribute__ ((aligned (16), packed));
 
 /*==================================================*
@@ -254,119 +265,81 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 
 	if (current->status != LWT_S_RUNNING && current->status != LWT_S_FINISHED && current->status != LWT_S_DEAD)
 		return;
-	
+
 	__asm__ __volatile__(
-		"leal %0, %%ebx \n\t"
-		"leal %1, %%ecx \n\t"
-//		"
+						 // 0. Put current thread's TCB pointer to %esi, next thread's TCB pointer to %edi
+						 "movl %0, %%esi \n\t"				// %esi = current
+						 "movl %1, %%edi \n\t"				// %edi = next
+
+						 // 1. Save current thread's context if its status is LWT_S_RUNNING
+						 "movl 0x14(%%esi), %%ebx \n\t"		// %ebx = current->status
+						 "cmp $0x2, %%ebx \n\t"				// if (current->status == LWT_S_RUNNING)
+						 "jne __switch_to_next \n\t"		// {
+						 "pushal \n\t"						//   pushal
+						 "movl $0x1, 0x14(%%esi) \n\t"		//   current->status = LWT_S_READY
+						 // Save stack pointer and base pointer
+						 "movl %%ebp, (%%esi) \n\t"			//   current->ebp = %ebp
+						 "movl %%esp, 0x4(%%esi) \n\t"		//   current->esp = %esp
+															// }
+						 
+						 // 2. Switch context to the next thread
+						 "__switch_to_next: \n\t"
+						 "movl 0x14(%%edi), %%ebx \n\t"		// %ebx = next->status
+
+						 "movl $0x3, 0x14(%%edi) \n\t"		// next->status = LWT_S_RUNNING;
+						 
+						 // Restore stack pointer and base pointer
+						 "movl %%edi, %%ebp \n\t"			// %ebp = next->ebp
+						 "movl 0x4(%%edi), %%esp \n\t"		// %esp = next->esp
+
+						 "cmp $0x0, %%ebx \n\t"				// switch (next->status)
+						 "je __next_case_lwt_s_created \n\t"	// case LWT_S_CREATED
+						 "cmp $0x1, %%ebx \n\t"
+						 "je __next_case_lwt_s_ready \n\t"		// case LWT_S_READY
+						 "jmp __after_switched \n\t"
+						 
+						 "__next_case_lwt_s_created: \n\t"	// case LWT_S_CREATED: {
+						 // Push parameters to stack for calling __lwt_start
+						 "sub $0x40, %%esp \n\t"			//   allocate stack space for calling __lwt_start
+						 "movl 0xc(%%edi), %%ebx \n\t"		//   %ebx = next->entry_fn_param
+						 "movl %%ebx, 0x8(%%esp) \n\t"		//   push %ebx
+						 "movl 0x8(%%edi), %%ebx \n\t"		//   %ebx = next->entry_fn
+						 "movl %%ebx, 0x4(%%esp) \n\t"		//   push %ebx
+						 
+						 // Set the returning address of __lwt_start() to lwt_die()
+						 "leal lwt_die, %%ebx \n\t"			//   %ebx = lwt_die
+						 "movl %%ebx, (%%esp) \n\t"			//   push %ebx
+						 
+						 // Jump to __lwt_trampoline, which will call __lwt_start.
+						 // The returning address of __lwt_start is lwt_die()
+						 "jmp __lwt_trampoline \n\t"		//   jmp __lwt_trampoline
+															//  }
+						 
+						 "__next_case_lwt_s_ready: \n\t"	// case LWT_S_READY: {
+						 "popal \n\t"						//   popal
+															//  }
+						 "__after_switched: \n\t"
+						 "movl 0x14(%%esi), %%ebx \n\t"		// %ebx = current->status
+
+						 "cmp $0x3, %%ebx \n\t"				// if (current->status == LWT_S_FINISHED)
+						 "jne __dispatch_end \n\t"			// {
+						 
+						 "movl 0x18(%%esi), %%ebx \n\t"		//    %ebx = current->stack
+						 "sub $0x20, %%esp \n\t"			//    allocate stack space for calling free
+						 "movl %%ebx, (%%esp) \n\t"			//    push %ebx
+						 "call free \n\t"					//    free(current->stack)
+						 "movl $0x0, 0x18(%%esi) \n\t"		//	  current->stack = NULL
+						 "movl $0x0, (%%esi) \n\t"			//    current->ebp = NULL
+						 "movl $0x0, 0x4(%%esi) \n\t"		//    current->esp = NULL
+						 "movl $0x0, 0x8(%%esi) \n\t"		//    current->entry_fn = NULL
+						 "movl $0x0, 0xc(%%esi) \n\t"		//    current->entry_fn_param = NULL
+															//  }
+						 "__dispatch_end: \n\t"
+						 
 						 :
-						 : "r" (current), "r"(next)
+						 : "r"(current), "r"(next)
 						 :
-	);
-	
-	switch (current->status)
-	{
-			// Current thread is running
-		case LWT_S_RUNNING:
-			current->status = LWT_S_READY;
-			__asm__ __volatile__ (
-								  // Save all registers to stack
-								  "pushal \n\t"								// push all registers to stack
-								  
-								  // Save stack pointer and base pointer
-								  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &current->ebp
-								  "movl %%ebp, (%%ebx) \n\t"				// current->ebp = %ebp
-								  "movl %%esp, 0x4(%%ebx) \n\t"				// current->esp = %esp
-								  :
-								  : "r" (current),
-								  LWT_STRUCT_OFFSET(ebp)
-								  :
-								  );
-			break;
-		case LWT_S_FINISHED:
-			
-			// Does nothing but to surpress the warnings.
-		default:
-			break;
-	}
-
-	switch (next->status)
-	{
-			// The next thread is just created, call __lwt_trampoline
-		case LWT_S_CREATED:
-			next->status = LWT_S_RUNNING;
-			__asm__ __volatile__ (
-								  // Restore stack pointer and base pointer
-								  "leal %c[ebp](%0), %%ebx \n\t"				// %ebx = &next->ebp
-								  "movl (%%ebx), %%ebp \n\t"					// %ebp = next->ebp
-								  "movl 0x4(%%ebx), %%esp \n\t"					// %esp = next->esp
-
-								  // Pass function call parameters via stack
-								  "sub $0x40, %%esp \n\t"						// allocate stack space for calling __lwt_start
-								  "leal %c[entry_fn_param](%0), %%ebx \n\t"		// %%ebx = &next->entry_fn_param
-								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn_param
-								  "movl %%ebx, 0x8(%%esp) \n\t"					// push %%ebx
-								  "leal %c[entry_fn](%0), %%ebx \n\t"			// %%ebx = &next->entry_fn
-								  "movl (%%ebx), %%ebx \n\t"					// %%ebx = next->entry_fn
-								  "movl %%ebx, 0x4(%%esp) \n\t"					// push %%ebx
-								  
-								  // Set the returning address of __lwt_start() to lwt_die()
-								  "leal lwt_die, %%ebx \n\t"					// %%ebx = lwt_die
-								  "movl %%ebx, (%%esp) \n\t"					// push %%ebx
-								  
-								  // Jumps to __lwt_trampoline, which will call __lwt_start.
-								  // The returning address of __lwt_start is lwt_die()
-								  "jmp __lwt_trampoline \n\t"
-								  :
-								  : "r" (next),
-									LWT_STRUCT_OFFSET(ebp),
-									LWT_STRUCT_OFFSET(entry_fn),
-									LWT_STRUCT_OFFSET(entry_fn_param)
-								  :
-								  );
-			/* +------------------------------------------------------------+ */
-			/* | !! Attention !!											| */
-			/* +------------------------------------------------------------+ */
-			/* |  The function parameters can NOT be accessed here,			| */
-			/* |  because they were stored on the "current" thread's stack,	| */
-			/* |  but now we have switched to the "next" thread's stack.	| */
-			/* +------------------------------------------------------------+ */
-			break;
-		
-			// The next thread is ready to be resumed
-		case LWT_S_READY:
-			next->status = LWT_S_RUNNING;
-			__asm__ __volatile__ (
-								  // Restore stack pointer and base pointer
-								  "leal %c[ebp](%0), %%ebx \n\t"			// %ebx = &next->ebp
-								  "movl (%%ebx), %%ebp \n\t"				// %ebp = next->ebp
-								  "movl 0x4(%%ebx), %%esp \n\t"				// %esp = next->esp
-								  "popal \n\t"								// resume the next thread
-								  :
-								  : "r" (next),
-								  LWT_STRUCT_OFFSET(ebp)
-								  :
-								  );
-			/* +------------------------------------------------------------+ */
-			/* | !! Attention !!											| */
-			/* +------------------------------------------------------------+ */
-			/* |  The function parameters can NOT be accessed here,			| */
-			/* |  because they were stored on the "current" thread's stack,	| */
-			/* |  but now we have switched to the "next" thread's stack.	| */
-			/* +------------------------------------------------------------+ */
-			break;
-			// Does nothing but to surpress the warnings.
-		default:
-			break;
-	}
-
-	/* +------------------------------------------------------------+ */
-	/* | !! Attention !!											| */
-	/* +------------------------------------------------------------+ */
-	/* |  The function parameters can NOT be accessed here,			| */
-	/* |  because they were stored on the "current" thread's stack,	| */
-	/* |  but now we have switched to the "next" thread's stack.	| */
-	/* +------------------------------------------------------------+ */
+						 );
 }
 
 /*--------------------------------------------------*
@@ -505,9 +478,9 @@ void lwt_die(void *data)
 	lwt_finished->entry_fn = NULL;
 	lwt_finished->entry_fn_param = NULL;
 
-	// release the thread's stack
-	free(lwt_finished->stack);
-	lwt_finished->stack = lwt_finished->ebp = lwt_finished->esp = NULL;
+//	// release the thread's stack
+//	free(lwt_finished->stack);
+//	lwt_finished->stack = lwt_finished->ebp = lwt_finished->esp = NULL;
 
 	// switch to the next available thread
 	__lwt_dispatch(__lwt_rq_head, lwt_finished);
