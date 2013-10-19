@@ -255,6 +255,15 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 	if (current->status != LWT_S_RUNNING && current->status != LWT_S_FINISHED && current->status != LWT_S_DEAD)
 		return;
 	
+	__asm__ __volatile__(
+		"leal %0, %%ebx \n\t"
+		"leal %1, %%ecx \n\t"
+//		"
+						 :
+						 : "r" (current), "r"(next)
+						 :
+	);
+	
 	switch (current->status)
 	{
 			// Current thread is running
