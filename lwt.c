@@ -13,7 +13,7 @@
 #include "lwt.h"
 
 /**
- Defines this to enable using the TCB pool
+ Defines USING_TCB_POOL to enable using the TCB pool
  */
 #define USING_TCB_POOL
 
