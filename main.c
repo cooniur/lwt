@@ -16,6 +16,13 @@
 
 #define ITER 10000
 
+/*
+ * Professor's performance on an Intel Core i5-2520M CPU @ 2.50GHz:
+ * Overhead for fork/join is 105
+ * Overhead of yield is 26
+ * Overhead of yield is 26
+ */
+
 int thd_cnt = 0;
 
 void *
@@ -106,7 +113,7 @@ int main(int argc, char *argv[])
 	int i;
 	unsigned long long start, end;
 	void* data;
-	
+
 	/* Performance tests */
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {
