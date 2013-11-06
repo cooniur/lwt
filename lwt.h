@@ -44,6 +44,8 @@ typedef enum
 	LWT_INFO_NTHD_BLOCKED
 } lwt_info_type_t;
 
+typedef struct __lwt_chan_t__ *lwt_chan_t;
+
 /*==================================================*
  *													*
  *				Declaration							*
@@ -86,6 +88,21 @@ int lwt_id(lwt_t lwt);
  */
 int lwt_join(lwt_t lwt, void **retval_ptr);
 
+/**
+ Gets the state of the lwt library
+ */
 size_t lwt_info(lwt_info_type_t type);
+
+lwt_chan_t lwt_chan(int sz);
+
+void lwt_chan_deref(lwt_chan_t c);
+
+int lwt_snd(lwt_chan_t c, void *data);
+
+void *lwt_rcv(lwt_chan_t c);
+
+void lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
+
+lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
 
 #endif

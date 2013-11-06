@@ -144,6 +144,19 @@ struct __lwt_t__
 	
 } __attribute__ ((aligned (16), packed));
 
+struct __lwt_chan_t__
+{
+	/**
+	 Sender's data
+	 */
+	void *snd_data;
+
+	/**
+	 Number of sending threads
+	 */
+	int snd_cnt;
+	
+};
 /*==================================================*
  *													*
  *				Global Variables					*
@@ -653,3 +666,33 @@ size_t lwt_info(lwt_info_type_t type)
 			return __lwt_info.num_zombies;
 	}
 }
+
+size_t lwt_info(lwt_info_type_t type)
+{
+
+}
+
+lwt_chan_t lwt_chan(int sz)
+{
+}
+
+void lwt_chan_deref(lwt_chan_t c)
+{
+}
+
+int lwt_snd(lwt_chan_t c, void *data)
+{
+}
+
+void *lwt_rcv(lwt_chan_t c)
+{
+}
+
+void lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
+{
+}
+
+lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
+{
+}
+
