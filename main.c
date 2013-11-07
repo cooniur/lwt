@@ -110,35 +110,60 @@ volatile lwt_chan_t public_c = NULL;
 
 void *fn_snd(void *d)
 {
-	lwt_chan_t public_c = lwt_chan(1);
-	lwt_chan_t snd_c = lwt_rcv_chan(public_c);
+	lwt_t lwt = lwt_current();
+	public_c = lwt_chan("pu");
 
+	printf("%p: 1. receive channel via %s.\n", lwt, lwt_chan_get_name(public_c));
+	printf("%p: receiving via %s...\n", lwt, lwt_chan_get_name(public_c));
+	lwt_chan_t snd_c = lwt_rcv_chan(public_c);
+	printf("%p: received %s via %s.\n", lwt, lwt_chan_get_name(snd_c), lwt_chan_get_name(public_c));
+
+	printf("%p: 2. send count via %s.\n", lwt, lwt_chan_get_name(snd_c));
 	int count = 10;
+	printf("%p: sending count = %d via channel %s...\n", lwt, count, lwt_chan_get_name(snd_c));
 	lwt_snd(snd_c, &count);
+	printf("%p: finished sending count = %d via channel %s.\n", lwt, count, lwt_chan_get_name(snd_c));
 	
+	printf("%p: 3. sending loop via %s.\n", lwt, lwt_chan_get_name(snd_c));
 	for (int i=0; i<count; i++)
 	{
-		lwt_snd(snd_c, &i);
+		int data = i * 2;
+		printf("%p: sending %d\n", lwt, data);
+		lwt_snd(snd_c, &data);
 	}
 
-	lwt_chan_deref(snd_c);
+	if (lwt_chan_deref(&snd_c))
+		printf("channel is freed.\n");
+	printf("%p: 4. end\n", lwt);
 	return NULL;
 }
-
+ 
 void *fn_rcv(void *d)
 {
-	lwt_chan_t rcv_c = lwt_chan(1);
+	lwt_t lwt = lwt_current();
+	lwt_chan_t rcv_c = lwt_chan("sn");
+
+	printf("%p: 1. send %s via %s.\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
+
+	printf("%p: sending %s via %s...\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
 	lwt_snd_chan(public_c, rcv_c);
+	printf("%p: finished sending %s via %s.\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
 	
+	printf("%p: 2. receive count via %s.\n", lwt, lwt_chan_get_name(rcv_c));
+	printf("%p: receiving count via %s...\n", lwt, lwt_chan_get_name(rcv_c));
 	int *count = lwt_rcv(rcv_c);
-	printf("count = %d\n", *count);
+	printf("%p: finished receiving count = %d via %s.\n", lwt, *count, lwt_chan_get_name(rcv_c));
+
+	printf("%p: 3. receiving loop via %s.\n", lwt, lwt_chan_get_name(rcv_c));
 	for (int i=0; i<*count; i++)
 	{
 		int *d = lwt_rcv(rcv_c);
-		printf("rcv: %d\n", *d);
+		printf("%p: %d\n", lwt, *d);
 	}
 
-	lwt_chan_deref(rcv_c);
+	if (lwt_chan_deref(&rcv_c))
+		printf("channel is freed.\n");
+	printf("%p: 4. end\n", lwt);
 	return NULL;
 }
 
@@ -151,8 +176,12 @@ int main(int argc, char *argv[])
 
 	chld1 = lwt_create(fn_snd, NULL);
 	chld2 = lwt_create(fn_rcv, NULL);
-	lwt_yield(NULL);
-	
+	printf("%p, %p, %p\n", lwt_current(), chld1, chld2);
+	lwt_yield(chld1);
+
+	lwt_join(chld2, &data);
+	lwt_join(chld1, &data);
+
 	return 0;
 	
 	/* Performance tests */

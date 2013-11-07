@@ -93,17 +93,20 @@ int lwt_join(lwt_t lwt, void **retval_ptr);
  */
 size_t lwt_info(lwt_info_type_t type);
 
-lwt_chan_t lwt_chan(int sz);
+lwt_chan_t lwt_chan(const char* name);
+
+const char *lwt_chan_get_name(lwt_chan_t c);
 
 /**
- Returns 1: channel c is ready to be freed
+ Returns -1: channel c is NULL
+ Returns 1: channel c is freed;
+ Returns 0: channel c is not freed;
  */
-int lwt_chan_deref(lwt_chan_t c);
+int lwt_chan_deref(lwt_chan_t *c);
 
 /**
- Returns -1: channel is null
- Returns -2: no existing receiver
- Returns -3: cannot sending to itself
+ Returns -1: no existing receiver
+ Returns -2: cannot sending to itself
  */
 int lwt_snd(lwt_chan_t c, void *data);
 int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);

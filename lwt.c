@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <assert.h>
+#include <string.h>
 
 #include "lwt.h"
 #include "dlinkedlist.h"
@@ -147,6 +148,11 @@ struct __lwt_t__
 
 struct __lwt_chan_t__
 {
+	/**
+	 Channel's name
+	 */
+	char *name;
+
 	/**
 	 Sender's data
 	 */
@@ -368,13 +374,13 @@ static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
 }
 
 /**
- Move tar to the head of the queue
+ Move tar to the head of the queue, put head to the tail
  */
 static void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
 {
 	if (!tar)
 		return;
-	
+
 	if (__lwt_q_empty(queue))
 		__lwt_q_inqueue(queue, tar);
 	else
@@ -539,6 +545,7 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data)
 	*esp = 0xA;
 
 	lwt->esp = esp;
+	lwt->status = LWT_S_READY;
 }
 
 /*--------------------------------------------------*
@@ -561,7 +568,7 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 		
 	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
 	new_lwt->id = __lwt_get_next_threadid();
-	new_lwt->status = LWT_S_READY;
+	new_lwt->status = LWT_S_CREATED;
 	new_lwt->prev = NULL;
 	new_lwt->next = NULL;
 	new_lwt->entry_fn = fn;
@@ -589,13 +596,16 @@ void lwt_yield(lwt_t target)
 	if (target == __run_q.head)
 		return;
 	
+	lwt_t current_lwt = lwt_current();
 	lwt_t next_lwt;
-	lwt_t current_lwt = __lwt_q_next(&__run_q);
 
 	if (target)
 		__lwt_q_queue_jmp(&__run_q, target);
-
+	else
+		__lwt_q_next(&__run_q);
+	
 	next_lwt = __run_q.head;
+
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
@@ -685,9 +695,21 @@ size_t lwt_info(lwt_info_type_t type)
 	}
 }
 
-lwt_chan_t lwt_chan(int sz)
+lwt_chan_t lwt_chan(const char *name)
 {
 	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
+	if (name)
+	{
+		size_t sz = strlen(name) + 1;
+		chan->name = calloc(sz, sizeof(char));
+		strncpy(chan->name, name, sz-1);
+		chan->name[sz-1] = '\0';
+	}
+	else
+	{
+		chan->name = malloc(sizeof(char));
+		chan->name = '\0';
+	}
 	chan->s_list = dlinkedlist_init();
 	chan->s_queue = dlinkedlist_init();
 	chan->snd_data = NULL;
@@ -698,47 +720,58 @@ lwt_chan_t lwt_chan(int sz)
 	return chan;
 }
 
-int lwt_chan_deref(lwt_chan_t c)
+int lwt_chan_deref(lwt_chan_t *c)
 {
+	if (!c || !(*c))
+		return -1;
+
 	lwt_t cur_lwt = lwt_current();
-	if (c->receiver == cur_lwt)
-		c->receiver = NULL;
+	if ((*c)->receiver == cur_lwt)
+		(*c)->receiver = NULL;
 	else
 	{
-		dlinkedlist_element_t *e = dlinkedlist_find(c->s_list, cur_lwt);
+		dlinkedlist_element_t *e = dlinkedlist_find((*c)->s_list, cur_lwt);
 		if (e)
-			dlinkedlist_remove(c->s_list, e);
+			dlinkedlist_remove((*c)->s_list, e);
 	}
 	
-	if (!c->receiver && dlinkedlist_size(c->s_list) == 0)
+	if (!((*c)->receiver) && dlinkedlist_size((*c)->s_list) == 0)
 	{
-		free(c);
+		free((*c)->name);
+		free(*c);
+		*c = NULL;
 		return 1;
 	}
 	else
 		return 0;
 }
 
+const char *lwt_chan_get_name(lwt_chan_t c)
+{
+	if (!c)
+		return NULL;
+
+	return c->name;
+}
+
 int lwt_snd(lwt_chan_t c, void *data)
 {
 	assert(data != NULL);
+	assert(c);
 
-	if (!c)
-		return -1;
-	
 	// No receiver exists, returns -1.
 	if (!c->receiver)
-		return -2;
+		return -1;
 
 	// Forbit receiver from sending to itself
 	lwt_t sndr = lwt_current();
 	if (c->receiver == sndr)
-		return -3;
+		return -2;
 
 	// Add sndr to sender queue
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
 
-	// If sndr is sending on this channel first time, add it to sender list
+	// If sndr has not sent on this channel before, add it to sender list
 	if (!dlinkedlist_find(c->s_list, sndr))
 		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
 	
@@ -746,20 +779,22 @@ int lwt_snd(lwt_chan_t c, void *data)
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
 		lwt_yield(NULL);
 
-	// spinning if it is my turn but the receiver is not blocked on this channel
+	// now it is my turn, set the data
+	c->snd_data = data;
+
+	// spinning if it is my turn but no receiver is blocked on this channel
 	while (!c->rcv_blocked)
 		lwt_yield(NULL);
-	
-	// Now the receiver is ready to receive, set the data and yield to it
-	c->snd_data = data;
+
+	// Now the receiver is ready to receive, yield to it
 	lwt_yield(c->receiver);
+
 	return 0;
 }
 
 void *lwt_rcv(lwt_chan_t c)
 {
-	if (!c)
-		return NULL;
+	assert(c);
 	
 	// spinning if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
@@ -767,22 +802,17 @@ void *lwt_rcv(lwt_chan_t c)
 		c->rcv_blocked = 1;
 		lwt_yield(NULL);
 	}
-	
-	// Now there is at lease one sender sending, yield to it
+
+	// now the data has been sent via the channel, get it, and set receiver's status to non-blocked
+	void *data = c->snd_data;
+	c->snd_data = NULL;
+	c->rcv_blocked = 0;
+
+	// remove sender from the sender queue
 	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
-	lwt_t sndr = e->data;
-	
-	// remove sndr from the sender queue
 	dlinkedlist_remove(c->s_queue, e);
 	dlinkedlist_element_free(&e);
 
-	// yield to sndr to allow it to prepare data
-	lwt_yield(sndr);
-
-	void *data = c->snd_data;
-	c->rcv_blocked = 0;
-	c->snd_data = NULL;
-	
 	return data;
 }
 
