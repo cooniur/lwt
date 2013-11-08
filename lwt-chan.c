@@ -115,7 +115,7 @@ void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz)
 void __lwt_chan_free_snd_buffer(lwt_chan_t c)
 {
 	if (c->snd_buffer)
-		ring_queue_free(&c->snd_buffer);
+		ring_queue_free(&(c->snd_buffer));
 }
 
 int __lwt_chan_try_to_free(lwt_chan_t *c)
@@ -228,10 +228,10 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void *data)
 void __lwt_snd_buffered(lwt_chan_t c, void *data)
 {
 	assert(c->snd_buffer);
-	
+
 	while (ring_queue_full(c->snd_buffer))
 		lwt_yield(NULL);
-	
+
 	ring_queue_inqueue(c->snd_buffer, data);
 }
 
@@ -275,11 +275,12 @@ void* __lwt_rcv_buffered(lwt_chan_t c)
 {
 	assert(c->snd_buffer);
 	
-	// spinning if nobody is sending on this channel
+	// spinning if buffer is empty
 	while (ring_queue_empty(c->snd_buffer))
 		lwt_yield(NULL);
 	
-	return ring_queue_dequeue(c->snd_buffer);
+	void* data = ring_queue_dequeue(c->snd_buffer);
+	return data;
 }
 
 

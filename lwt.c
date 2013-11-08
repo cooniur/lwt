@@ -265,6 +265,23 @@ static int __lwt_get_next_threadid()
  *	Run Queue functions								*
  *													*
  *--------------------------------------------------*/
+static void __lwt_q_display(struct __lwt_queue_t__ *queue)
+{
+	if (__lwt_q_empty(queue))
+		return;
+
+	size_t i =0;
+	lwt_t cur = queue->head;
+	printf("Run Queue: ");
+	while (i < queue->size)
+	{
+		printf("[%d]%p, ", i, cur);
+		cur = cur->next;
+		i++;
+	}
+	printf(".\n");
+}
+
 /**
  Returns 1 if the run queue is empty; otherwise, 0
  */
@@ -309,6 +326,7 @@ static lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue)
 	queue->head = queue->head->next;
 	queue->tail = queue->tail->next;
 	
+	__lwt_q_display(queue);
 	return ret;
 }
 
@@ -335,6 +353,7 @@ static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
 	if (queue->size == 0)
 		queue->head = queue->tail = NULL;
 
+	__lwt_q_display(queue);
 	return ret;
 }
 
@@ -362,6 +381,8 @@ static void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
 		queue->tail = queue->head;
 		queue->head = tar;
 	}
+
+	__lwt_q_display(queue);
 }
 
 static inline lwt_t __lwt_q_head(struct __lwt_queue_t__ *queue)
@@ -571,6 +592,7 @@ void lwt_yield(lwt_t target)
 	
 	next_lwt = __run_q.head;
 
+	printf("%p: yield to %p.\n", current_lwt, next_lwt);
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 

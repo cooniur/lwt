@@ -127,21 +127,23 @@ void *fn_snd(void *d)
 	printf("%p: 3. sending loop via %s.\n", lwt, lwt_chan_get_name(snd_c));
 	for (int i=0; i<count; i++)
 	{
-		int data = i * 2;
-		printf("%p: sending %d\n", lwt, data);
-		lwt_snd(snd_c, &data);
+		int *data = malloc(sizeof(int));
+		*data = i * 2;
+		printf("%p: sending %d\n", lwt, *data);
+		lwt_snd(snd_c, data);
 	}
 
 	if (lwt_chan_deref(&snd_c))
 		printf("channel is freed.\n");
 	printf("%p: 4. end\n", lwt);
+	
 	return NULL;
 }
  
 void *fn_rcv(void *d)
 {
 	lwt_t lwt = lwt_current();
-	lwt_chan_t rcv_c = lwt_chan(3, "sn");
+	lwt_chan_t rcv_c = lwt_chan(5, "sn");
 
 	printf("%p: 1. send %s via %s.\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
 
@@ -159,11 +161,13 @@ void *fn_rcv(void *d)
 	{
 		int *d = lwt_rcv(rcv_c);
 		printf("%p: %d\n", lwt, *d);
+		free(d);
 	}
 
+	printf("%p: 4. end\n", lwt);
 	if (lwt_chan_deref(&rcv_c))
 		printf("channel is freed.\n");
-	printf("%p: 4. end\n", lwt);
+	
 	return NULL;
 }
 
