@@ -150,12 +150,20 @@ struct __lwt_chan_t__
 	 Sender's data
 	 */
 	void *snd_data;
-
+	
 	/**
 	 Number of sending threads
 	 */
 	int snd_cnt;
 	
+	/**
+	 Sender queue
+	 */
+	void *s_queue;
+	
+	int rcv_blocked;
+	
+	lwt_t receiver;
 };
 /*==================================================*
  *													*
@@ -669,31 +677,76 @@ size_t lwt_info(lwt_info_type_t type)
 
 lwt_chan_t lwt_chan(int sz)
 {
-	return NULL;
+	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
+	chan->rcv_blocked = 0;
+	chan->receiver = lwt_current();
+	chan->s_queue.init();
+	chan->snd_cnt = 0;
+	chan->snd_data = NULL;
+	chan->will_send = 0;
+	return chan;
 }
 
 void lwt_chan_deref(lwt_chan_t c)
 {
-	
+	lwt_t cur_lwt = lwt_current();
+	if (c->receiver == cur_lwt)
+		c->receiver = NULL;
+	else
+		c->s_queue.remove(cur_lwt);
 }
 
 int lwt_snd(lwt_chan_t c, void *data)
 {
+	assert(data != NULL);
+
+	// No receiver exists, returns -1.
+	if (!c->receiver)
+		return -1;
+	
+	lwt_t sndr = lwt_current();
+	c->s_queue.add(sndr);
+	
+	// spinning if it is not my turn
+	while (c->s_queue.peek() != sndr)
+		lwt_yield(NULL);
+
+	// spinning if it is my turn but the receiver is not blocked on this channel
+	while (!c->rcv_blocked)
+		lwt_yield(NULL);
+	
+	// Now the receiver is ready to receive, set the data and yield to it
+	c->snd_data = data;
+	lwt_yield(c->receiver);
 	return 0;
 }
 
 void *lwt_rcv(lwt_chan_t c)
 {
-	return NULL;
+	// spinning if nobody is sending on this channel
+	while (c->s_queue.empty())
+	{
+		c->rcv_blocked = 1;
+		lwt_yield(NULL);
+	}
+
+	lwt_t sndr = c->s_queue.pop();
+	lwt_yield(sndr);
+
+	void *data = c->snd_data;
+	c->rcv_blocked = 0;
+	c->snd_data = NULL;
+	
+	return data;
 }
 
 void lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
 {
-	
+	lwt_snd(c, sc);
 }
 
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
 {
-	return NULL;
+	return lwt_rcv(c);
 }
 
