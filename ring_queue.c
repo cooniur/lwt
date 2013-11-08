@@ -12,6 +12,9 @@
 
 #include "ring_queue.h"
 
+#define __ring_queue_print_debug(rq) \
+	//printf("Debug info: Queue head %d, tail %d, size %d.\n", rq->head, rq->tail, ring_queue_size(rq))
+
 // The ring queue struct
 struct __ring_queue_t__
 {
@@ -26,8 +29,8 @@ ring_queue_t *ring_queue_init(size_t capacity)
 	ring_queue_t *rq = malloc(sizeof(struct __ring_queue_t__));
 	if (rq)
 	{
-		rq->capacity = capacity;
-		rq->buf = malloc(sizeof(void*) * capacity);
+		rq->capacity = capacity + 1;
+		rq->buf = malloc(sizeof(void*) * rq->capacity);
 		if (rq->buf)
 			ring_queue_reset(rq);
 		else
@@ -57,7 +60,7 @@ void ring_queue_reset(ring_queue_t *rq)
 
 size_t ring_queue_capacity(ring_queue_t *rq)
 {
-	return rq->capacity;
+	return rq->capacity -1;
 }
 
 size_t ring_queue_size(ring_queue_t *rq)
@@ -67,18 +70,12 @@ size_t ring_queue_size(ring_queue_t *rq)
 
 int ring_queue_empty(ring_queue_t *rq)
 {
-	if (rq->head == rq->tail)
-		return 1;
-	else
-		return 0;
+	return (rq->head == rq->tail);
 }
 
 int ring_queue_full(ring_queue_t *rq)
 {
-	if (((rq->tail + 1) % rq->capacity) == rq->head)
-		return 1;
-	else
-		return 0;
+	return ((rq->tail + 1) % rq->capacity) == rq->head;
 }
 
 int ring_queue_inqueue(ring_queue_t *rq, void* data)
@@ -91,6 +88,7 @@ int ring_queue_inqueue(ring_queue_t *rq, void* data)
 	
 	rq->buf[rq->tail] = data;
 	rq->tail = (rq->tail + 1) % rq->capacity;
+	__ring_queue_print_debug(rq);
 	return 1;
 }
 
@@ -103,5 +101,7 @@ void* ring_queue_dequeue(ring_queue_t *rq)
 	assert(ret);
 
 	rq->head = (rq->head + 1) % rq->capacity;
+	__ring_queue_print_debug(rq);
 	return ret;
 }
+
