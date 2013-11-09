@@ -106,6 +106,41 @@ assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
 lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
 lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
 
+lwt_chan_t public_c = NULL;
+
+void *fn_snd(void *d)
+{
+	lwt_chan_t public_c = lwt_chan(1);
+	lwt_chan_t snd_c = lwt_rcv_chan(public_c);
+
+	int count = 10;
+	lwt_snd(snd_c, &count);
+	
+	for (int i=0; i<count; i++)
+	{
+		lwt_snd(snd_c, &i);
+	}
+
+	lwt_chan_deref(snd_c);
+	return NULL;
+}
+
+void *fn_rcv(void *d)
+{
+	lwt_chan_t rcv_c = lwt_chan(1);
+	lwt_snd_chan(public_c, rcv_c);
+	
+	int *count = lwt_rcv(rcv_c);
+	printf("count = %d\n", *count);
+	for (int i=0; i<*count; i++)
+	{
+		int *d = lwt_rcv(rcv_c);
+		printf("rcv: %d\n", *d);
+	}
+
+	lwt_chan_deref(rcv_c);
+	return NULL;
+}
 
 int main(int argc, char *argv[])
 {
@@ -114,6 +149,12 @@ int main(int argc, char *argv[])
 	unsigned long long start, end;
 	void* data;
 
+	chld1 = lwt_create(fn_snd, NULL);
+	chld2 = lwt_create(fn_rcv, NULL);
+	lwt_yield(NULL);
+	
+	return 0;
+	
 	/* Performance tests */
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {

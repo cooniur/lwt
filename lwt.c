@@ -711,7 +711,10 @@ int lwt_chan_deref(lwt_chan_t c)
 	}
 	
 	if (!c->receiver && dlinkedlist_size(c->s_list) == 0)
+	{
+		free(c);
 		return 1;
+	}
 	else
 		return 0;
 }
