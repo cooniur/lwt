@@ -106,7 +106,7 @@ assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
 lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
 lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
 
-lwt_chan_t public_c = NULL;
+volatile lwt_chan_t public_c = NULL;
 
 void *fn_snd(void *d)
 {
