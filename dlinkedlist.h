@@ -38,6 +38,6 @@ int dlinkedlist_remove(dlinkedlist_t *list, dlinkedlist_element_t *e);
 #define dlinkedlist_foreach_element(e, list) \
 	size_t size = dlinkedlist_size(list); \
 	dlinkedlist_element_t *(e) = (list)->first;	\
-	for (int i = 0; i < size; (e) = (e)->next, i++)
+	for (size_t i = 0; i < size; (e) = (e)->next, i++)
 
 #endif
