@@ -101,15 +101,14 @@ lwt_chan_t lwt_chan(int sz);
 int lwt_chan_deref(lwt_chan_t c);
 
 /**
- Returns -1: no existing receiver
- Returns -2: cannot sending to itself
+ Returns -1: channel is null
+ Returns -2: no existing receiver
+ Returns -3: cannot sending to itself
  */
 int lwt_snd(lwt_chan_t c, void *data);
+int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
 
 void *lwt_rcv(lwt_chan_t c);
-
-void lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
-
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
 
 #endif

@@ -723,14 +723,17 @@ int lwt_snd(lwt_chan_t c, void *data)
 {
 	assert(data != NULL);
 
+	if (!c)
+		return -1;
+	
 	// No receiver exists, returns -1.
 	if (!c->receiver)
-		return -1;
+		return -2;
 
 	// Forbit receiver from sending to itself
 	lwt_t sndr = lwt_current();
 	if (c->receiver == sndr)
-		return -2;
+		return -3;
 
 	// Add sndr to sender queue
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
@@ -755,6 +758,9 @@ int lwt_snd(lwt_chan_t c, void *data)
 
 void *lwt_rcv(lwt_chan_t c)
 {
+	if (!c)
+		return NULL;
+	
 	// spinning if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
@@ -780,9 +786,9 @@ void *lwt_rcv(lwt_chan_t c)
 	return data;
 }
 
-void lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
+int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
 {
-	lwt_snd(c, sc);
+	return lwt_snd(c, sc);
 }
 
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
