@@ -1,6 +1,6 @@
 COBJS		= main.o lwt.o dlinkedlist.o
-CFLAGS		= -O3 -I. -Wall -Wextra
-#CFLAGS		= -g -I. -Wall -Wextra
+CFLAGS		= -O3 -I. -Wall -Wextra -std=gnu99
+#CFLAGS		= -g -I. -Wall -Wextra -std=gnu99
 CC			= gcc
 
 AOBJS		= lwt_trampoline.o
@@ -8,8 +8,8 @@ AFLAGS		=
 AS			= gcc
 
 BIN			= test
-BFLAGS		= -O3 -I. -Wall -Wextra
-#BFLAGS		= -g -I. -Wall -Wextra
+BFLAGS		= -O3 -I. -Wall -Wextra -std=gnu99
+#BFLAGS		= -g -I. -Wall -Wextra -std=gnu99
 LD			= ld
 
 all: $(BIN)
