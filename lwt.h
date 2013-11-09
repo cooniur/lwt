@@ -37,7 +37,7 @@ typedef enum __lwt_status_t__ lwt_status_t;
 /**
  lwt_info_type_t: Defines types of thread information
  */
-typedef enum
+typedef enum __lwt_info_type_t__
 {
 	LWT_INFO_NTHD_RUNNABLE = 0,
 	LWT_INFO_NTHD_ZOMBIES,
@@ -95,8 +95,15 @@ size_t lwt_info(lwt_info_type_t type);
 
 lwt_chan_t lwt_chan(int sz);
 
-void lwt_chan_deref(lwt_chan_t c);
+/**
+ Returns 1: channel c is ready to be freed
+ */
+int lwt_chan_deref(lwt_chan_t c);
 
+/**
+ Returns -1: no existing receiver
+ Returns -2: cannot sending to itself
+ */
 int lwt_snd(lwt_chan_t c, void *data);
 
 void *lwt_rcv(lwt_chan_t c);

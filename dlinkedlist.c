@@ -40,7 +40,7 @@ void dlinkedlist_free(dlinkedlist_t **list)
 	}
 }
 
-dlinkedlist_element_t *dlinkedlist_init_element(void *data)
+dlinkedlist_element_t *dlinkedlist_element_init(void *data)
 {
 	dlinkedlist_element_t *e = malloc(sizeof(dlinkedlist_element_t));
 	e->data = data;
@@ -48,7 +48,7 @@ dlinkedlist_element_t *dlinkedlist_init_element(void *data)
 	return e;
 }
 
-void dlinkedlist_free_element(dlinkedlist_element_t **e)
+void dlinkedlist_element_free(dlinkedlist_element_t **e)
 {
 	if (e && *e)
 	{

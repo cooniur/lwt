@@ -12,6 +12,7 @@
 #include <assert.h>
 
 #include "lwt.h"
+#include "dlinkedlist.h"
 
 /*==================================================*
  *													*
@@ -154,15 +155,24 @@ struct __lwt_chan_t__
 	/**
 	 Number of sending threads
 	 */
-	int snd_cnt;
+	size_t snd_cnt;
 	
 	/**
 	 Sender queue
 	 */
-	void *s_queue;
+	dlinkedlist_t *s_queue;
 	
+	/**
+	 Sender list
+	 */
+	dlinkedlist_t *s_list;
+
+	/**
+	 */
 	int rcv_blocked;
 	
+	/**
+	 */
 	lwt_t receiver;
 };
 /*==================================================*
@@ -678,22 +688,32 @@ size_t lwt_info(lwt_info_type_t type)
 lwt_chan_t lwt_chan(int sz)
 {
 	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
+	chan->s_list = dlinkedlist_init();
+	chan->s_queue = dlinkedlist_init();
+	chan->snd_data = NULL;
+
 	chan->rcv_blocked = 0;
 	chan->receiver = lwt_current();
-	chan->s_queue.init();
-	chan->snd_cnt = 0;
-	chan->snd_data = NULL;
-	chan->will_send = 0;
+	
 	return chan;
 }
 
-void lwt_chan_deref(lwt_chan_t c)
+int lwt_chan_deref(lwt_chan_t c)
 {
 	lwt_t cur_lwt = lwt_current();
 	if (c->receiver == cur_lwt)
 		c->receiver = NULL;
 	else
-		c->s_queue.remove(cur_lwt);
+	{
+		dlinkedlist_element_t *e = dlinkedlist_find(c->s_list, cur_lwt);
+		if (e)
+			dlinkedlist_remove(c->s_list, e);
+	}
+	
+	if (!c->receiver && dlinkedlist_size(c->s_list) == 0)
+		return 1;
+	else
+		return 0;
 }
 
 int lwt_snd(lwt_chan_t c, void *data)
@@ -703,12 +723,21 @@ int lwt_snd(lwt_chan_t c, void *data)
 	// No receiver exists, returns -1.
 	if (!c->receiver)
 		return -1;
-	
+
+	// Forbit receiver from sending to itself
 	lwt_t sndr = lwt_current();
-	c->s_queue.add(sndr);
+	if (c->receiver == sndr)
+		return -2;
+
+	// Add sndr to sender queue
+	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+
+	// If sndr is sending on this channel first time, add it to sender list
+	if (!dlinkedlist_find(c->s_list, sndr))
+		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
 	
 	// spinning if it is not my turn
-	while (c->s_queue.peek() != sndr)
+	while (dlinkedlist_first(c->s_queue)->data != sndr)
 		lwt_yield(NULL);
 
 	// spinning if it is my turn but the receiver is not blocked on this channel
@@ -724,13 +753,21 @@ int lwt_snd(lwt_chan_t c, void *data)
 void *lwt_rcv(lwt_chan_t c)
 {
 	// spinning if nobody is sending on this channel
-	while (c->s_queue.empty())
+	while (dlinkedlist_size(c->s_queue) == 0)
 	{
 		c->rcv_blocked = 1;
 		lwt_yield(NULL);
 	}
+	
+	// Now there is at lease one sender sending, yield to it
+	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
+	lwt_t sndr = e->data;
+	
+	// remove sndr from the sender queue
+	dlinkedlist_remove(c->s_queue, e);
+	dlinkedlist_element_free(&e);
 
-	lwt_t sndr = c->s_queue.pop();
+	// yield to sndr to allow it to prepare data
 	lwt_yield(sndr);
 
 	void *data = c->snd_data;

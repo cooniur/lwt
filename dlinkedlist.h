@@ -23,8 +23,9 @@ struct __dlst_el_t__
 
 dlinkedlist_t *dlinkedlist_init();
 void dlinkedlist_free(dlinkedlist_t **list);
-dlinkedlist_element_t *dlinkedlist_init_element(void *data);
-void dlinkedlist_free_element(dlinkedlist_element_t **e);
+
+dlinkedlist_element_t *dlinkedlist_element_init(void *data);
+void dlinkedlist_element_free(dlinkedlist_element_t **e);
 
 dlinkedlist_element_t *dlinkedlist_first(dlinkedlist_t *list);
 dlinkedlist_element_t *dlinkedlist_last(dlinkedlist_t *list);
