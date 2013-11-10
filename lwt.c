@@ -166,7 +166,6 @@ int lwt_queue_empty(struct __lwt_queue_t__* queue)
 void lwt_queue_insert_before(struct __lwt_queue_t__* queue, struct __lwt_t__* victim, struct __lwt_t__* lwt)
 {
 	assert(queue == victim->queue);
-	assert(queue == lwt->queue);
 
 	victim->prev->next = lwt;
 	lwt->prev = victim->prev;
@@ -245,6 +244,7 @@ void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 		queue->tail = lwt->prev;
 
 	lwt->prev = lwt->next = NULL;
+	lwt->queue = NULL;
 }
 
 struct __lwt_t__* lwt_queue_peek(struct __lwt_queue_t__* queue)
@@ -795,6 +795,13 @@ struct __lwt_chan_t__
 	 Number of events in this channel
 	 */
 	size_t events_num;
+
+	/**
+	 Indicates whether this channel is queued in event queue.
+	 This flag makes sure that when doing a grouped buffered sending,
+	 the channel only be added into the group's event queue only once.
+	 */
+	int event_queued;
 };
 
 void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data);
@@ -990,10 +997,11 @@ int lwt_snd(lwt_chan_t c, void* data)
 	// debug_print("%p: lwt_snd: %s's lwt_list count=%d", lwt_current(), lwt_chan_get_name(c), dlinkedlist_size(c->s_list));
 	// debug_print(", sending count=%d\n", lwt_chan_sending_count(c));
 
-	if (c->grp)
+	if (c->grp && !c->event_queued)
 	{
 		c->events_num++;
 		dlinkedlist_add(c->grp->event_queue, dlinkedlist_element_init(c));
+		c->event_queued = 1;
 	}
 
 	if (__lwt_chan_use_buffer(c))
@@ -1118,6 +1126,8 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
 	dlinkedlist_element_t* e = dlinkedlist_first(grp->event_queue);
 	dlinkedlist_remove(grp->event_queue, e);
 	lwt_chan_t c = e->data;
+	c->events_num--;
+	c->event_queued = 0;
 	dlinkedlist_element_free(&e);
 	return c;
 }
