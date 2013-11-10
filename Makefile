@@ -1,3 +1,5 @@
+DEBUG_FLAG	= -DDEBUG -DNDEBUG_PRINT -D_Q_DEBUG
+
 COBJS		= main.o lwt.o dlinkedlist.o ring_queue.o
 CFLAGS		= -O3 -I. -Wall -Wextra -std=gnu99
 #CFLAGS		= -g -I. -Wall -Wextra -std=gnu99
@@ -17,7 +19,7 @@ all: $(BIN)
 $(COBJS) : %.o : %.c
 #	$(info ********** Start making project **********)
 #	$(info --> Compiling C objs...)
-	$(CC) $(CFLAGS) -o $@ -c $<
+	$(CC) $(CFLAGS) $(DEBUG_FLAG) -o $@ -c $<
 #	$(info --> C objs generated...)
 	
 $(AOBJS) : %.o : %.s
@@ -27,7 +29,7 @@ $(AOBJS) : %.o : %.s
 
 $(BIN): $(COBJS) $(AOBJS)
 #	$(info --> Linking objects...)
-	$(CC) $(BFLAGS) -o $(BIN) $^
+	$(CC) $(BFLAGS) $(DEBUG_FLAG) -o $(BIN) $^
 	rm -rf $(COBJS) $(AOBJS)
 #	$(info --> Finished, run ./$(BIN) to start.)
 #	$(info ********** End of making project **********)

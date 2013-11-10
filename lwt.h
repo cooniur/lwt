@@ -53,6 +53,8 @@ typedef enum __lwt_info_type_t__
 	LWT_INFO_NTHD_BLOCKED
 } lwt_info_type_t;
 
+void lwt_init();
+
 /**
  Creates a lwt thread, with the entry function pointer fn,
  and the parameter pointer data used by fn

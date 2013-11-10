@@ -15,8 +15,7 @@
 #include "lwt.h"
 #include "ring_queue.h"
 #include "dlinkedlist.h"
-
-//#define _DEBUG_
+#include "debug_print.h"
 
 /**
  Gets the offset of a field inside a struc
@@ -312,13 +311,11 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
 extern void __lwt_trampoline();
 // =======================================================
 
-
-#ifndef _DEBUG_
-#define debug_showqueue(q, name)
-#else
 void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name)
 {
+	static int count = 0;
 	lwt_t cur = queue->head;
+	printf("%p: ", lwt_current());
 	printf("%s: ", queue_name);
 	size_t i = 0;
 	while (cur && i < queue->size)
@@ -326,10 +323,16 @@ void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name
 		printf("%p, ", cur);
 		cur = cur->next;
 		i++;
+		if (count++ > 10)
+			break;
 	}
 	printf("\n");
+	count = 0;
 }
 
+#ifndef Q_DEBUG
+#define debug_showqueue(q, name) ((void)0)
+#else
 #define debug_showqueue(q, name) \
 	__lwt_debug_showqueue(q, name)
 #endif
@@ -503,7 +506,6 @@ void __lwt_block()
 	
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
-	
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
@@ -528,6 +530,11 @@ void __lwt_wakeup_all()
 }
 
 // =======================================================
+
+void lwt_init()
+{
+	__lwt_main_thread_init();
+}
 
 /**
  Creates a lwt thread, with the entry function pointer fn,
@@ -625,7 +632,7 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 	// Thread is joinable
 	if (!(lwt->flags & LWT_F_NOJOIN))
 	{
-		while(lwt->status <= LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
+		while(lwt->status < LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
 			__lwt_block();
 
 		lwt->status = LWT_S_DEAD;
@@ -864,6 +871,7 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 {
 	// Add sndr to sender queue
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+	debug_print("%p: __lwt_snd_blocked: spinning not my turn.\n", lwt_current());
 	// spinning if it is not my turn
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
 		lwt_yield(NULL);
@@ -872,10 +880,14 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	c->snd_data = data;
 	
 	// spinning if it is my turn but no receiver is blocked on this channel
-	while (!c->rcv_blocked)
+	debug_print("%p: __lwt_snd_blocked: spinning no rcv.\n", lwt_current());
+	while (!c->rcv_blocked && c->snd_data)
+	{
 		lwt_yield(NULL);
+	}
 	
 	// Now the receiver is ready to receive, yield to it
+	debug_print("%p: __lwt_snd_blocked: yield to rcver %p.\n", lwt_current(), c->receiver);
 	lwt_yield(c->receiver);
 }
 
@@ -889,6 +901,7 @@ void __lwt_snd_buffered(lwt_chan_t c, void* data)
 
 void* __lwt_rcv_blocked(lwt_chan_t c)
 {
+	debug_print("%p: __lwt_rcv_blocked: spinning nobody snd\n", lwt_current());
 	// spinning if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
@@ -896,6 +909,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 		lwt_yield(NULL);
 	}
 	
+	debug_print("%p: __lwt_rcv_blocked: rcved %p.\n", lwt_current(), c->snd_data);
 	// now the data has been sent via the channel, get it, and set receiver's status to non-blocked
 	void *data = c->snd_data;
 	c->snd_data = NULL;
@@ -905,6 +919,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
 	dlinkedlist_remove(c->s_queue, e);
 	dlinkedlist_element_free(&e);
+	// debug_print("%p: __lwt_rcv_blocked: lwt list count=%d\n", lwt_current(), lwt_chan_sending_count(c));
 
 	return data;
 }
@@ -977,6 +992,9 @@ int lwt_snd(lwt_chan_t c, void* data)
 	if (!dlinkedlist_find(c->s_list, sndr))
 		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
 
+	// debug_print("%p: lwt_snd: %s's lwt_list count=%d", lwt_current(), lwt_chan_get_name(c), dlinkedlist_size(c->s_list));
+	// debug_print(", sending count=%d\n", lwt_chan_sending_count(c));
+
 	if (c->grp)
 	{
 		c->grp->total_pending_events_num++;
@@ -991,6 +1009,7 @@ int lwt_snd(lwt_chan_t c, void* data)
 	else
 	{
 		// Send data blocked
+		debug_print("%p: lwt_snd: -> __lwt_snd_blocked.\n", lwt_current());
 		__lwt_snd_blocked(sndr, c, data);
 	}
 	return 0;
@@ -1005,6 +1024,7 @@ void* lwt_rcv(lwt_chan_t c)
 	}
 	else
 	{
+		debug_print("%p: lwt_rcv: -> __lwt_rcv_blocked.\n", lwt_current());
 		ret = __lwt_rcv_blocked(c);
 	}
 	

@@ -11,6 +11,7 @@
 #include <assert.h>
 
 #include "lwt.h"
+#include "debug_print.h"
 
 #define rdtscll(val) __asm__ __volatile__("rdtsc" : "=A" (val))
 
@@ -126,10 +127,10 @@ void *
 fn_join(void *d)
 {
 	lwt_t t = (lwt_t)d;
-	void *r;
+	void* r;
 
 	lwt_join(d, &r);
-	assert(r != (void*)0x37337);
+	assert(r == (void*)0x37337);
 	return NULL;
 }
 
@@ -194,9 +195,10 @@ fn_chan(void *data)
 	lwt_chan_t to = data;
 	int i;
 	
-	from = lwt_chan(0, "f");
+	from = lwt_chan(0, "thread_rcving_ch");
 	lwt_snd_chan(to, from);
-	assert(lwt_chan_sending_count(from));
+	assert(lwt_chan_sending_count(to) == 1);
+
 	for (i = 0 ; i < ITER ; i++) {
 		lwt_snd(to, (void*)1);
 		assert(2 == (int)lwt_rcv(from));
@@ -213,15 +215,17 @@ test_perf_channels(int chsz)
 	lwt_t t;
 	int i;
 	unsigned long long start, end;
+	size_t snd_cnt;
 
 	assert(LWT_S_RUNNING == lwt_status(lwt_current()));
-	from = lwt_chan(chsz, "bf");
+	from = lwt_chan(chsz, "main_rcving_ch");
 	assert(from);
 //	lwt_chan_grant(from);
+	
 	t    = lwt_create(fn_chan, from, 0);
 	to   = lwt_rcv_chan(from);
-//	assert(to->snd_cnt);
-	assert(lwt_chan_sending_count(to));
+	assert(lwt_chan_sending_count(from) == 1);
+	
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {
 		assert(1 == (int)lwt_rcv(from));
@@ -229,8 +233,10 @@ test_perf_channels(int chsz)
 	}
 	lwt_chan_deref(&to);
 	rdtscll(end);
+	
 	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n", 
 	       (end-start)/(ITER*2), chsz);
+	
 	lwt_join(t, NULL);
 }
 
@@ -411,6 +417,7 @@ test_grpwait(int chsz, int grpsz)
 int
 main(void)
 {
+	// lwt_init();
 	test_perf();
 	test_crt_join_sched();
 	test_perf_channels(0);
@@ -418,7 +425,7 @@ main(void)
 	test_perf_async_steam(ITER/10 < 100 ? ITER/10 : 100);
 	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
 	test_grpwait(0, 3);
-	test_grpwait(3, 3);
+	// test_grpwait(3, 3);
 
 	return 0;
 }
