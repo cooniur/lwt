@@ -140,7 +140,12 @@ int dlinkedlist_remove(dlinkedlist_t* list, dlinkedlist_element_t* e)
 	
 	e->prev->next = e->next;
 	e->next->prev = e->prev;
-	
+
+	if (e == list->first)
+		list->first = e->next;
+	else if (e == list->last)
+		list->last = e->prev;
+
 	e->next = e->prev = NULL;
 	
 	list->size--;
