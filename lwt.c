@@ -174,6 +174,23 @@ int lwt_queue_empty(struct __lwt_queue_t__* queue)
 	return lwt_queue_size(queue) == 0;
 }
 
+void lwt_queue_insert_before(struct __lwt_queue_t__* queue, struct __lwt_t__* victim, struct __lwt_t__* lwt)
+{
+	assert(queue == victim->queue);
+	assert(queue == lwt->queue);
+
+	victim->prev->next = lwt;
+	lwt->prev = victim->prev;
+
+	victim->prev = lwt;
+	lwt->next = victim;
+
+	if (victim == queue->head)
+		queue->head = lwt;
+
+	queue->size++;
+}
+
 void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 {
 	if (lwt_queue_empty(queue))
@@ -187,7 +204,10 @@ void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 	{
 		lwt->prev = queue->tail;
 		lwt->next = queue->head;
+
 		queue->tail->next = lwt;
+		queue->head->prev = lwt;
+
 		queue->tail = lwt;
 	}
 	lwt->queue = queue;
@@ -197,9 +217,7 @@ void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 {
 	struct __lwt_t__* ret = queue->head;
-	ret->prev = ret->next = NULL;
 	
-	queue->size--;
 	if (queue->size > 0)
 	{
 		queue->head = queue->head->next;
@@ -209,7 +227,10 @@ struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 	else
 		queue->head = queue->tail = NULL;
 	
+	ret->prev = ret->next = NULL;
 	ret->queue = NULL;
+
+	queue->size--;
 	return ret;
 }
 
@@ -224,10 +245,16 @@ void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 	if (lwt_queue_empty(queue))
 		queue->head = queue->tail = NULL;
 	else
-		
+	{
 		lwt->prev->next = lwt->next;
-	lwt->next->prev = lwt->prev;
-	
+		lwt->next->prev = lwt->prev;
+	}
+
+	if (lwt == queue->head)
+		queue->head = lwt->next;
+	else if (lwt == queue->tail)
+		queue->tail = lwt->prev;
+
 	lwt->prev = lwt->next = NULL;
 }
 
@@ -303,10 +330,12 @@ void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name
 {
 	lwt_t cur = queue->head;
 	printf("%s: ", queue_name);
-	while (cur && (cur != queue->tail))
+	size_t i = 0;
+	while (cur && i < queue->size)
 	{
 		printf("%p, ", cur);
 		cur = cur->next;
+		i++;
 	}
 	printf("\n");
 }
@@ -537,7 +566,7 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	
 	lwt_queue_inqueue(&__run_q, new_lwt);
 	
-	debug_showqueue(__run_q, "run queue");
+	debug_showqueue(&__run_q, "run queue");
 	
 	__lwt_info.num_runnable++;
 	
@@ -549,25 +578,25 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
  */
 void lwt_yield(lwt_t target)
 {
-	debug_showqueue(__run_q, "run queue");
+	debug_showqueue(&__run_q, "run queue");
 
 	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
 	lwt_queue_inqueue(&__run_q, current_lwt);
 	current_lwt->status = LWT_S_READY;
 
-	debug_showqueue(__run_q, "run queue");
+	debug_showqueue(&__run_q, "run queue");
 
 	if (target)
 	{
 		if (target->status == LWT_S_BLOCKED)
 		{
 			lwt_queue_remove(&__wait_q, target);
-			lwt_queue_inqueue(&__run_q, target);
+			lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
 		}
 		else if (target->status == LWT_S_READY)
 		{
 			lwt_queue_remove(&__run_q, target);
-			lwt_queue_inqueue(&__run_q, target);
+			lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
 		}
 	}
 	
@@ -625,8 +654,13 @@ void lwt_die(void *data)
 	__lwt_info.num_zombies++;
 	__lwt_info.num_runnable--;
 
+	if (lwt_queue_size(&__run_q) == 0)
+		__lwt_wakeup_all();
+
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
+
+	__lwt_wakeup_all();
 
 	__lwt_dispatch(next_lwt, lwt_finished);
 }

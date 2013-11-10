@@ -129,8 +129,9 @@ void *fn_snd(void *d)
 	{
 		int *data = malloc(sizeof(int));
 		*data = i * 2;
-		printf("%p: sending %d\n", lwt, *data);
+		printf("%p: sending %d...\n", lwt, *data);
 		lwt_snd(snd_c, data);
+		printf("%p: %d sent.\n", lwt, *data);
 	}
 
 	if (lwt_chan_deref(&snd_c))
@@ -159,6 +160,7 @@ void *fn_rcv(void *d)
 	printf("%p: 3. receiving loop via %s.\n", lwt, lwt_chan_get_name(rcv_c));
 	for (int i=0; i<*count; i++)
 	{
+		printf("%p: receiving...\n", lwt);
 		int *d = lwt_rcv(rcv_c);
 		printf("%p: %d\n", lwt, *d);
 		free(d);
@@ -260,20 +262,25 @@ void* fn_print(void* data)
 {
 	int* i = data;
 	printf("Thread: %d\n", *i);
-	return NULL;
+	*i += 1;
+	return i;
 }
 
 int main(int argc, char *argv[])
 {
-//	test_lwt();
+	test_lwt();
 	
 	int data = 10;
+	printf("start\n");
+	
 	lwt_t chld1 = lwt_create(fn_print, &data);
-	lwt_yield(LWT_NULL);
+	lwt_yield(chld1);
+	void* ret;
+	lwt_join(chld1, &ret);
+	int* i = ret;
+	printf("%d, end\n", *i);
 	
-	printf("end\n");
-	
-//	test_lwt_chan();
+	test_lwt_chan();
 
 	return 0;
 }
