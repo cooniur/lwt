@@ -186,6 +186,7 @@ test_crt_join_sched(void)
 	assert(lwt_info(LWT_INFO_NTHD_ZOMBIES) == 1);
 	lwt_join(chld1, NULL);
 	IS_RESET();
+	printf("[TEST] thread creation/join/scheduling passed.\n");
 }
 
 void *
@@ -235,7 +236,7 @@ test_perf_channels(int chsz)
 	rdtscll(end);
 	
 	lwt_join(t, NULL);
-	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n", 
+	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n",
 	       (end-start)/(ITER*2), chsz);
 }
 
@@ -409,8 +410,7 @@ test_grpwait(int chsz, int grpsz)
 		lwt_chan_deref(&cs[i]);
 	}
 	assert(!lwt_cgrp_free(g));
-	
-	printf("[TEST] group wait (channel buffer size %d, grpsz %d) passed.\n", 
+	printf("[TEST] group wait (channel buffer size %d, grpsz %d) passed.\n",
 	       chsz, grpsz);
 	return;
 }
