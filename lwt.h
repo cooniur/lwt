@@ -17,7 +17,7 @@
 /**
  LWT_NULL: Defines the marco of a NULL thread descriptor
  */
-#define LWT_NULL NULL
+#define LWT_NULL (NULL)
 
 /**
  lwt_fn_t: Type of a pointer to a thread entry function
