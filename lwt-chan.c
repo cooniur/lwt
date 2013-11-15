@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include "lwt.h"
 #include "lwt-chan.h"
+#include "dlinkedlist.h"
 
 struct __lwt_chan_t__
 {
