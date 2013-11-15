@@ -44,8 +44,6 @@ typedef enum __lwt_info_type_t__
 	LWT_INFO_NTHD_BLOCKED
 } lwt_info_type_t;
 
-typedef struct __lwt_chan_t__ *lwt_chan_t;
-
 /*==================================================*
  *													*
  *				Declaration							*
@@ -93,25 +91,7 @@ int lwt_join(lwt_t lwt, void **retval_ptr);
  */
 size_t lwt_info(lwt_info_type_t type);
 
-lwt_chan_t lwt_chan(const char* name);
-
-const char *lwt_chan_get_name(lwt_chan_t c);
-
-/**
- Returns -1: channel c is NULL
- Returns 1: channel c is freed;
- Returns 0: channel c is not freed;
- */
-int lwt_chan_deref(lwt_chan_t *c);
-
-/**
- Returns -1: no existing receiver
- Returns -2: cannot sending to itself
- */
-int lwt_snd(lwt_chan_t c, void *data);
-int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
-
-void *lwt_rcv(lwt_chan_t c);
-lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
+// lwt channel support
+#include "lwt-chan.h"
 
 #endif

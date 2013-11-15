@@ -1,4 +1,4 @@
-COBJS		= main.o lwt.o dlinkedlist.o
+COBJS		= main.o lwt.o lwt-chan.o dlinkedlist.o ring_queue.o
 CFLAGS		= -O3 -I. -Wall -Wextra -std=gnu99
 #CFLAGS		= -g -I. -Wall -Wextra -std=gnu99
 CC			= gcc
