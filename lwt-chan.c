@@ -8,7 +8,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
+
 #include "lwt.h"
 #include "lwt-chan.h"
 #include "dlinkedlist.h"
