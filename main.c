@@ -111,12 +111,12 @@ volatile lwt_chan_t public_c = NULL;
 void *fn_snd(void *d)
 {
 	lwt_t lwt = lwt_current();
-	public_c = lwt_chan("pu");
+	public_c = lwt_chan(0, "pu");
 
 	printf("%p: 1. receive channel via %s.\n", lwt, lwt_chan_get_name(public_c));
 	printf("%p: receiving via %s...\n", lwt, lwt_chan_get_name(public_c));
 	lwt_chan_t snd_c = lwt_rcv_chan(public_c);
-	printf("%p: received %s via %s.\n", lwt, lwt_chan_get_name(snd_c), lwt_chan_get_name(public_c));
+	printf("%p: received %s via %s.\n", lwt,  lwt_chan_get_name(snd_c), lwt_chan_get_name(public_c));
 
 	printf("%p: 2. send count via %s.\n", lwt, lwt_chan_get_name(snd_c));
 	int count = 10;
@@ -141,7 +141,7 @@ void *fn_snd(void *d)
 void *fn_rcv(void *d)
 {
 	lwt_t lwt = lwt_current();
-	lwt_chan_t rcv_c = lwt_chan("sn");
+	lwt_chan_t rcv_c = lwt_chan(0, "sn");
 
 	printf("%p: 1. send %s via %s.\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
 

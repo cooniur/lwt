@@ -11,7 +11,7 @@
 
 typedef struct __lwt_chan_t__ *lwt_chan_t;
 
-lwt_chan_t lwt_chan(const char* name);
+lwt_chan_t lwt_chan(size_t sz, const char *name);
 
 const char *lwt_chan_get_name(lwt_chan_t c);
 

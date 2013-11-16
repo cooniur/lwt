@@ -11,7 +11,7 @@
 typedef struct __ring_queue_t__ ring_queue_t;
 
 // Initialize a new ring queue with the specified capacity
-ring_queue_t*	ring_queue_new(size_t capacity);
+ring_queue_t*	ring_queue_init(size_t capacity);
 // Free a ring queue
 void			ring_queue_free(ring_queue_t **rq);
 

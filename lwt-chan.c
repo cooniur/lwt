@@ -14,6 +14,9 @@
 #include "lwt.h"
 #include "lwt-chan.h"
 #include "dlinkedlist.h"
+#include "ring_queue.h"
+
+#define DEFAULT_SND_BUFFER_SIZE	(10)
 
 struct __lwt_chan_t__
 {
@@ -26,6 +29,31 @@ struct __lwt_chan_t__
 	 Sender's data
 	 */
 	void *snd_data;
+
+	/**
+	 Sender queue
+	 */
+	dlinkedlist_t *s_queue;
+	
+	/**
+	 Indicates whether a receiver is blocked on this channel
+	 */
+	int rcv_blocked;
+	
+	/**
+	 The receiver thread
+	 */
+	lwt_t receiver;
+
+	/**
+	 Sender's data buffer
+	 */
+	ring_queue_t *snd_buffer;
+	
+	/**
+	 Sender's data buffer size;
+	 */
+	size_t snd_buffer_size;
 	
 	/**
 	 Number of sending threads
@@ -33,45 +61,89 @@ struct __lwt_chan_t__
 	size_t snd_cnt;
 	
 	/**
-	 Sender queue
-	 */
-	dlinkedlist_t *s_queue;
-	
-	/**
 	 Sender list
 	 */
 	dlinkedlist_t *s_list;
 	
-	/**
-	 */
-	int rcv_blocked;
-	
-	/**
-	 */
-	lwt_t receiver;
 };
 
-lwt_chan_t lwt_chan(const char *name)
+void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void *data);
+void __lwt_snd_buffered(lwt_chan_t c, void *data);
+
+void* __lwt_rcv_blocked(lwt_chan_t c);
+void* __lwt_rcv_buffered(lwt_chan_t c);
+
+int __lwt_chan_use_buffer(lwt_chan_t c);
+void __lwt_chan_set_name(lwt_chan_t c, const char *name);
+
+void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz);
+void __lwt_chan_free_snd_buffer(lwt_chan_t c);
+int __lwt_chan_try_to_free(lwt_chan_t *c);
+
+int __lwt_chan_use_buffer(lwt_chan_t c)
 {
-	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
+	return c->snd_buffer_size > 0;
+}
+
+void __lwt_chan_set_name(lwt_chan_t c, const char *name)
+{
 	if (name)
 	{
 		size_t sz = strlen(name) + 1;
-		chan->name = calloc(sz, sizeof(char));
-		strncpy(chan->name, name, sz-1);
-		chan->name[sz-1] = '\0';
+		c->name = calloc(sz, sizeof(char));
+		strncpy(c->name, name, sz-1);
+		c->name[sz-1] = '\0';
 	}
 	else
 	{
-		chan->name = malloc(sizeof(char));
-		chan->name = '\0';
+		c->name = calloc(1, sizeof(char));
+		c->name[0] = '\0';
 	}
+}
+
+void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz)
+{
+	c->snd_buffer_size = sz;
+	if (sz == 0)
+		c->snd_buffer = NULL;
+	else
+	{
+		c->snd_buffer = ring_queue_init(sz);
+	}
+}
+
+void __lwt_chan_free_snd_buffer(lwt_chan_t c)
+{
+	if (c->snd_buffer)
+		ring_queue_free(&c->snd_buffer);
+}
+
+int __lwt_chan_try_to_free(lwt_chan_t *c)
+{
+	if (!((*c)->receiver) && dlinkedlist_size((*c)->s_list) == 0)
+	{
+		__lwt_chan_free_snd_buffer(*c);
+		free((*c)->name);
+		free(*c);
+		*c = NULL;
+		return 1;
+	}
+	else
+		return 0;
+}
+
+
+lwt_chan_t lwt_chan(size_t sz, const char *name)
+{
+	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
 	chan->s_list = dlinkedlist_init();
 	chan->s_queue = dlinkedlist_init();
 	chan->snd_data = NULL;
-	
 	chan->rcv_blocked = 0;
 	chan->receiver = lwt_current();
+	
+	__lwt_chan_set_name(chan, name);
+	__lwt_chan_init_snd_buffer(chan, sz);
 	
 	return chan;
 }
@@ -91,15 +163,7 @@ int lwt_chan_deref(lwt_chan_t *c)
 			dlinkedlist_remove((*c)->s_list, e);
 	}
 	
-	if (!((*c)->receiver) && dlinkedlist_size((*c)->s_list) == 0)
-	{
-		free((*c)->name);
-		free(*c);
-		*c = NULL;
-		return 1;
-	}
-	else
-		return 0;
+	return __lwt_chan_try_to_free(c);
 }
 
 const char *lwt_chan_get_name(lwt_chan_t c)
@@ -112,7 +176,7 @@ const char *lwt_chan_get_name(lwt_chan_t c)
 
 int lwt_snd(lwt_chan_t c, void *data)
 {
-	assert(data != NULL);
+	assert(data);
 	assert(c);
 	
 	// No receiver exists, returns -1.
@@ -124,13 +188,28 @@ int lwt_snd(lwt_chan_t c, void *data)
 	if (c->receiver == sndr)
 		return -2;
 	
-	// Add sndr to sender queue
-	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
-	
 	// If sndr has not sent on this channel before, add it to sender list
 	if (!dlinkedlist_find(c->s_list, sndr))
 		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
-	
+
+	if (__lwt_chan_use_buffer(c))
+	{
+		// Send data buffered
+		__lwt_snd_buffered(c, data);
+	}
+	else
+	{
+		// Send data blocked
+		__lwt_snd_blocked(sndr, c, data);
+	}
+
+	return 0;
+}
+
+void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void *data)
+{
+	// Add sndr to sender queue
+	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
 	// spinning if it is not my turn
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
 		lwt_yield(NULL);
@@ -144,14 +223,34 @@ int lwt_snd(lwt_chan_t c, void *data)
 	
 	// Now the receiver is ready to receive, yield to it
 	lwt_yield(c->receiver);
+}
+
+void __lwt_snd_buffered(lwt_chan_t c, void *data)
+{
+	assert(c->snd_buffer);
 	
-	return 0;
+	while (ring_queue_full(c->snd_buffer))
+		lwt_yield(NULL);
+	
+	ring_queue_inqueue(c->snd_buffer, data);
 }
 
 void *lwt_rcv(lwt_chan_t c)
 {
 	assert(c);
 	
+	if (__lwt_chan_use_buffer(c))
+	{
+		return __lwt_rcv_buffered(c);
+	}
+	else
+	{
+		return __lwt_rcv_blocked(c);
+	}
+}
+
+void* __lwt_rcv_blocked(lwt_chan_t c)
+{
 	// spinning if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
@@ -171,6 +270,20 @@ void *lwt_rcv(lwt_chan_t c)
 	
 	return data;
 }
+
+void* __lwt_rcv_buffered(lwt_chan_t c)
+{
+	assert(c->snd_buffer);
+	
+	// spinning if nobody is sending on this channel
+	while (ring_queue_empty(c->snd_buffer))
+		lwt_yield(NULL);
+	
+	void* data = ring_queue_dequeue(c->snd_buffer);
+	
+	return data;
+}
+
 
 int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
 {

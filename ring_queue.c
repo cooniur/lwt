@@ -21,7 +21,7 @@ struct __ring_queue_t__
 	size_t capacity;
 };
 
-ring_queue_t *ring_queue_new(size_t capacity)
+ring_queue_t *ring_queue_init(size_t capacity)
 {
 	ring_queue_t *rq = malloc(sizeof(struct __ring_queue_t__));
 	if (rq)
