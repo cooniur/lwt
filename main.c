@@ -141,7 +141,7 @@ void *fn_snd(void *d)
 void *fn_rcv(void *d)
 {
 	lwt_t lwt = lwt_current();
-	lwt_chan_t rcv_c = lwt_chan(0, "sn");
+	lwt_chan_t rcv_c = lwt_chan(3, "sn");
 
 	printf("%p: 1. send %s via %s.\n", lwt, lwt_chan_get_name(rcv_c), lwt_chan_get_name(public_c));
 

@@ -279,9 +279,7 @@ void* __lwt_rcv_buffered(lwt_chan_t c)
 	while (ring_queue_empty(c->snd_buffer))
 		lwt_yield(NULL);
 	
-	void* data = ring_queue_dequeue(c->snd_buffer);
-	
-	return data;
+	return ring_queue_dequeue(c->snd_buffer);
 }
 
 

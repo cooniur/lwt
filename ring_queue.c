@@ -100,7 +100,7 @@ void* ring_queue_dequeue(ring_queue_t *rq)
 		return NULL;
 	
 	void* ret = rq->buf[rq->head];
-	assert(ret != NULL);
+	assert(ret);
 
 	rq->head = (rq->head + 1) % rq->capacity;
 	return ret;
