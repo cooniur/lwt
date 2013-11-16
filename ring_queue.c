@@ -42,13 +42,8 @@ ring_queue_t *ring_queue_init(size_t capacity)
 
 void ring_queue_free(ring_queue_t **rq)
 {
-	size_t i;
 	if (rq && *rq)
 	{
-		for (i=0; i<(*rq)->capacity; i++)
-		{
-			free((*rq)->buf[i]);
-		}
 		free((*rq)->buf);
 		free(*rq);
 		*rq = NULL;
