@@ -171,23 +171,13 @@ void *fn_rcv(void *d)
 	return NULL;
 }
 
-int main(int argc, char *argv[])
+void test_lwt()
 {
 	lwt_t chld1, chld2;
 	int i;
 	unsigned long long start, end;
 	void* data;
 
-	chld1 = lwt_create(fn_snd, NULL);
-	chld2 = lwt_create(fn_rcv, NULL);
-	printf("%p, %p, %p\n", lwt_current(), chld1, chld2);
-	lwt_yield(chld1);
-
-	lwt_join(chld2, &data);
-	lwt_join(chld1, &data);
-
-	return 0;
-	
 	/* Performance tests */
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {
@@ -250,6 +240,26 @@ int main(int argc, char *argv[])
 	IS_RESET();
 	
 	assert(thd_cnt == ITER+12);
+}
+
+void test_lwt_chan()
+{
+	lwt_t chld1, chld2;
+	void* data;
+	
+	chld1 = lwt_create(fn_snd, NULL);
+	chld2 = lwt_create(fn_rcv, NULL);
+	printf("%p, %p, %p\n", lwt_current(), chld1, chld2);
+	lwt_yield(chld1);
+	
+	lwt_join(chld2, &data);
+	lwt_join(chld1, &data);
+}
+int main(int argc, char *argv[])
+{
+	test_lwt();
+	
+//	test_lwt_chan();
 
 	return 0;
 }
