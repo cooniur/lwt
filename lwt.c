@@ -276,7 +276,7 @@ struct __lwt_info_t__ __lwt_info = {1, 0, 0};
  A new thread's entry point
  Calls __lwt_start (in assembly)
  */
-static void __lwt_start(lwt_fn_t fn, void* data);
+void __lwt_start(lwt_fn_t fn, void* data);
 
 static void __lwt_block();
 static void __lwt_wakeup(lwt_t blocked_lwt);
