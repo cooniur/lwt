@@ -272,9 +272,6 @@ int __lwt_threadid = 1;
 struct __lwt_info_t__ __lwt_info = {1, 0, 0};
 
 // =======================================================
-
-extern void __lwt_trampoline();
-
 /**
  A new thread's entry point
  Calls __lwt_start (in assembly)
@@ -293,6 +290,7 @@ static void __lwt_main_thread_init();
 
 static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data);
 
+extern void __lwt_trampoline();
 // =======================================================
 
 /**
