@@ -13,18 +13,14 @@
 #include <string.h>
 
 #include "lwt.h"
+#include "ring_queue.h"
 #include "dlinkedlist.h"
 
-/*==================================================*
- *													*
- *				Useful Marcos						*
- *													*
- *==================================================*/
 /**
  Gets the offset of a field inside a struc
  */
 #define LWT_STRUCT_OFFSET(Field) \
-	[Field] "i" (offsetof(struct __lwt_t__, Field))
+[Field] "i" (offsetof(struct __lwt_t__, Field))
 
 /**
  Default size of the stack used by a lwt thread
@@ -36,11 +32,6 @@
  */
 #define TCB_POOL_SIZE (64)
 
-/*==================================================*
- *													*
- *				Types Definition					*
- *													*
- *==================================================*/
 /**
  Thread status enum
  */
@@ -49,6 +40,7 @@ enum __lwt_status_t__
 	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
 	LWT_S_READY,			// Thread is switched out, and ready to be switched to
 	LWT_S_RUNNING,			// Thread is running
+	LWT_S_BLOCKED,			// Thread is blocked and in wait queue
 	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
 	LWT_S_DEAD				// Thread is joined and finally dead.
 };
@@ -63,15 +55,6 @@ struct __lwt_info_t__
 	size_t num_blocked;
 };
 
-/**
- Thread queue type
- */
-struct __lwt_queue_t__
-{
-	lwt_t head;
-	lwt_t tail;
-	size_t size;
-};
 
 /**
  Thread Descriptor
@@ -101,7 +84,7 @@ struct __lwt_t__
 	 Offset: 0xc
 	 */
 	void* entry_fn_param;
-
+	
 	/**
 	 Thread Return Value Pointer
 	 Offset: 0x10
@@ -113,13 +96,13 @@ struct __lwt_t__
 	 Offset: 0x14
 	 */
 	lwt_status_t status;
-
+	
 	/**
 	 Stack Memory Pointer by malloc
 	 Offset: 0x18
 	 */
 	void* stack;
-
+	
 	/**
 	 Thread ID
 	 Offset: 0x1c
@@ -131,31 +114,142 @@ struct __lwt_t__
 	 Offset: 0x20
 	 */
 	size_t stack_size;
-
+	
+	/**
+	 In which queue this lwt is
+	 */
+	struct __lwt_queue_t__* queue;
+	
 	/**
 	 Points to the next thread descriptor
 	 Offset: 0x24
 	 */
-	struct __lwt_t__ *next;
+	struct __lwt_t__* next;
 	
 	/**
 	 Points to the previous thread descriptor
 	 Offset: 0x28
 	 */
-	struct __lwt_t__ *prev;
+	struct __lwt_t__* prev;
 	
 } __attribute__ ((aligned (16), packed));
 
-/*==================================================*
- *													*
- *				Global Variables					*
- *													*
- *==================================================*/
+/**
+ Thread queue type
+ */
+struct __lwt_queue_t__
+{
+	struct __lwt_t__* head;
+	struct __lwt_t__* tail;
+	size_t size;
+};
+
+struct __lwt_queue_t__* lwt_queue_init();
+size_t lwt_queue_size(struct __lwt_queue_t__* queue);
+
+void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
+struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue);
+void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
+
+struct __lwt_t__* lwt_queue_peek(struct __lwt_queue_t__* queue);
+
+struct __lwt_queue_t__* lwt_queue_init()
+{
+	struct __lwt_queue_t__* queue = malloc(sizeof(struct __lwt_queue_t__));
+	queue->head = NULL;
+	queue->tail = NULL;
+	queue->size = 0;
+	return queue;
+}
+
+size_t lwt_queue_size(struct __lwt_queue_t__* queue)
+{
+	return queue->size;
+}
+
+int lwt_queue_empty(struct __lwt_queue_t__* queue)
+{
+	return lwt_queue_size(queue) == 0;
+}
+
+void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
+{
+	if (lwt_queue_empty(queue))
+	{
+		lwt->next = lwt;
+		lwt->prev = lwt;
+		queue->head = lwt;
+		queue->tail = lwt;
+	}
+	else
+	{
+		lwt->prev = queue->tail;
+		lwt->next = queue->head;
+		queue->tail->next = lwt;
+		queue->tail = lwt;
+	}
+	lwt->queue = queue;
+	queue->size++;
+}
+
+struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
+{
+	struct __lwt_t__* ret = queue->head;
+	ret->prev = ret->next = NULL;
+	
+	queue->size--;
+	if (queue->size > 0)
+	{
+		queue->head = queue->head->next;
+		queue->tail->next = queue->head;
+		queue->head->prev = queue->tail;
+	}
+	else
+		queue->head = queue->tail = NULL;
+	
+	ret->queue = NULL;
+	return ret;
+}
+
+void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
+{
+	assert(lwt->queue == queue);
+	assert(!lwt_queue_empty(queue));
+	assert(lwt->prev);
+	assert(lwt->next);
+	
+	queue->size--;
+	if (lwt_queue_empty(queue))
+		queue->head = queue->tail = NULL;
+	else
+		
+		lwt->prev->next = lwt->next;
+	lwt->next->prev = lwt->prev;
+	
+	lwt->prev = lwt->next = NULL;
+}
+
+struct __lwt_t__* lwt_queue_peek(struct __lwt_queue_t__* queue)
+{
+	if (queue)
+		return queue->head;
+	else
+		return NULL;
+}
+
+// =======================================================
+
 /**
  The Run Queue
  run_q.head always points to the current thread
  */
 struct __lwt_queue_t__ __run_q = {NULL, NULL, 0};
+
+/**
+ The Wait Queue
+ threads that are blocked will be added into this queue
+ */
+struct __lwt_queue_t__ __wait_q = {NULL, NULL, 0};
 
 /**
  The Dead Queue: recycled TCBs
@@ -177,19 +271,19 @@ int __lwt_threadid = 1;
  */
 struct __lwt_info_t__ __lwt_info = {1, 0, 0};
 
-/*==================================================*
- *													*
- *				Declaration							*
- *													*
- *==================================================*/
+// =======================================================
+
+extern void __lwt_trampoline();
 
 /**
  A new thread's entry point
  Calls __lwt_start (in assembly)
  */
-extern void __lwt_trampoline(lwt_fn_t fn, void* data);
-void __lwt_start(lwt_fn_t fn, void* data);
+static void __lwt_start(lwt_fn_t fn, void* data);
 
+static void __lwt_block();
+static void __lwt_wakeup(lwt_t blocked_lwt);
+static void __lwt_wakeup_all();
 static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current);
 
 static lwt_t __lwt_init_lwt();
@@ -197,29 +291,9 @@ static void __lwt_init_tcb_pool();
 static int __lwt_get_next_threadid();
 static void __lwt_main_thread_init();
 
-static inline int __lwt_q_empty(struct __lwt_queue_t__ *queue);
-static inline void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt);
-static inline lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue);
-static inline lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue);
-static inline void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar);
-static inline lwt_t __lwt_q_head(struct __lwt_queue_t__ *queue);
-static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue);
-
 static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data);
 
-extern void __lwt_trampoline();
-
-/*==================================================*
- *													*
- *				Implementation						*
- *													*
- *==================================================*/
-
-/*--------------------------------------------------*
- *													*
- *	Static functions								*
- *													*
- *--------------------------------------------------*/
+// =======================================================
 
 /**
  Initialize TCB pool
@@ -229,7 +303,8 @@ static void __lwt_init_tcb_pool()
 	int i;
 	for (i=0; i<TCB_POOL_SIZE; i++)
 	{
-		__lwt_q_inqueue(&__dead_q, __lwt_init_lwt());
+//		__lwt_q_inqueue(&__dead_q, __lwt_init_lwt());
+		lwt_queue_inqueue(&__dead_q, __lwt_init_lwt());
 	}
 }
 
@@ -237,7 +312,7 @@ lwt_t __lwt_init_lwt()
 {
 	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
 	new_lwt->id = __lwt_get_next_threadid();
-	new_lwt->status = LWT_S_CREATED;
+	new_lwt->status = LWT_S_DEAD;
 	new_lwt->prev = NULL;
 	new_lwt->next = NULL;
 	new_lwt->entry_fn = NULL;
@@ -260,151 +335,10 @@ static int __lwt_get_next_threadid()
 	return __lwt_threadid++;
 }
 
-/*--------------------------------------------------*
- *													*
- *	Run Queue functions								*
- *													*
- *--------------------------------------------------*/
-static void __lwt_q_display(struct __lwt_queue_t__ *queue)
-{
-	if (__lwt_q_empty(queue))
-		return;
-
-	size_t i =0;
-	lwt_t cur = queue->head;
-	printf("Run Queue: ");
-	while (i < queue->size)
-	{
-		printf("[%d]%p, ", i, cur);
-		cur = cur->next;
-		i++;
-	}
-	printf(".\n");
-}
-
-/**
- Returns 1 if the run queue is empty; otherwise, 0
- */
-static int __lwt_q_empty(struct __lwt_queue_t__ *queue)
-{
-	return queue->size == 0;
-}
-
-/**
- Adds the new_lwt to the tail of the run queue.
- Makes sure tail->next is always the head
- */
-static void __lwt_q_inqueue(struct __lwt_queue_t__ *queue, lwt_t lwt)
-{
-	if (__lwt_q_empty(queue))
-	{
-		lwt->next = lwt;
-		lwt->prev = lwt;
-		queue->head = lwt;
-		queue->tail = lwt;
-	}
-	else
-	{
-		lwt->prev = queue->tail;
-		lwt->next = queue->head;
-		queue->tail->next = lwt;
-		queue->tail = lwt;
-	}
-	queue->size++;
-}
-
-/**
- Returns the head of the run queue, moves the head to head->next
- */
-static lwt_t __lwt_q_next(struct __lwt_queue_t__ *queue)
-{
-	if (__lwt_q_empty(queue))
-		return NULL;
-	
-	lwt_t ret = queue->head;
-	
-	queue->head = queue->head->next;
-	queue->tail = queue->tail->next;
-	
-	__lwt_q_display(queue);
-	return ret;
-}
-
-/**
- Removes the head node from the run queue and returns it.
- Moves head to head->next
- */
-static lwt_t __lwt_q_dequeue(struct __lwt_queue_t__ *queue)
-{
-	if (__lwt_q_empty(queue))
-		return NULL;
-	
-	lwt_t ret = queue->head;
-	
-	queue->tail->next = queue->head->next;
-	queue->head->next->prev = queue->tail;
-	queue->head = queue->head->next;
-	
-	ret->next = NULL;
-	ret->prev = NULL;
-	
-	queue->size--;
-	
-	if (queue->size == 0)
-		queue->head = queue->tail = NULL;
-
-	__lwt_q_display(queue);
-	return ret;
-}
-
-/**
- Move tar to the head of the queue, put head to the tail
- */
-static void __lwt_q_queue_jmp(struct __lwt_queue_t__ *queue, lwt_t tar)
-{
-	if (!tar)
-		return;
-
-	if (__lwt_q_empty(queue))
-		__lwt_q_inqueue(queue, tar);
-	else
-	{
-		if (tar->prev->next != tar)
-		{
-			tar->prev->next = tar->next;
-			tar->next->prev = tar->prev;
-			tar->next = queue->head->next;
-			queue->head->next->prev = tar;
-			tar->prev = queue->head;
-			queue->head->next = tar;
-		}
-		queue->tail = queue->head;
-		queue->head = tar;
-	}
-
-	__lwt_q_display(queue);
-}
-
-static inline lwt_t __lwt_q_head(struct __lwt_queue_t__ *queue)
-{
-	return queue->head;
-}
-
-static inline lwt_t __lwt_q_tail(struct __lwt_queue_t__ *queue)
-{
-	return queue->tail;
-}
-
-/*--------------------------------------------------*
- *													*
- *	Scheduler functions								*
- *													*
- *--------------------------------------------------*/
 /**
  Switches from the "current" thread to the "next" thread
  Must be noinline function
  */
-__attribute__ ((noinline))
 static void __lwt_dispatch(lwt_t next, lwt_t current)
 {
 	__asm__ __volatile__ (
@@ -437,12 +371,6 @@ static void __lwt_dispatch(lwt_t next, lwt_t current)
 
 }
 
-/*--------------------------------------------------*
- *													*
- *	Entry functions									*
- *													*
- *--------------------------------------------------*/
-
 /**
  Puts the main thread into the run queue
  */
@@ -457,7 +385,8 @@ static void __lwt_main_thread_init()
 	__main_thread->stack = NULL;
 	__main_thread->next = NULL;
 	
-	__lwt_q_inqueue(&__run_q, __main_thread);
+//	__lwt_q_inqueue(&__run_q, __main_thread);
+	lwt_queue_inqueue(&__run_q, __main_thread);
 }
 
 /**
@@ -479,13 +408,6 @@ void __lwt_start(lwt_fn_t fn, void* data)
 						  : "r" (ret)
 						  :
 						  );
-	/* +------------------------------------------------------------+ */
-	/* | !! Attention !!											| */
-	/* +------------------------------------------------------------+ */
-	/* |  Now jump to lwt_die() implicitly.							| */
-	/* |  The calling convention does this amazing thing for us		| */
-	/* |  automatically! :D											| */
-	/* +------------------------------------------------------------+ */
 }
 
 static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data)
@@ -534,11 +456,39 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data)
 	lwt->status = LWT_S_READY;
 }
 
-/*--------------------------------------------------*
- *													*
- *	Public functions								*
- *													*
- *--------------------------------------------------*/
+void __lwt_block()
+{
+	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
+	current_lwt->status = LWT_S_BLOCKED;
+	lwt_queue_inqueue(&__wait_q, current_lwt);
+	
+	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	next_lwt->status = LWT_S_RUNNING;
+	
+	__lwt_dispatch(next_lwt, current_lwt);
+}
+
+static void __lwt_wakeup(lwt_t blocked_lwt)
+{
+	if (blocked_lwt->status == LWT_S_BLOCKED)
+	{
+		lwt_queue_remove(&__wait_q, blocked_lwt);
+		blocked_lwt->status = LWT_S_READY;
+		lwt_queue_inqueue(&__run_q, blocked_lwt);
+	}
+}
+
+void __lwt_wakeup_all()
+{
+	while (lwt_queue_size(&__wait_q) > 0)
+	{
+		lwt_t blocked_lwt = lwt_queue_dequeue(&__wait_q);
+		blocked_lwt->status = LWT_S_READY;
+		lwt_queue_inqueue(&__run_q, blocked_lwt);
+	}
+}
+
+// =======================================================
 
 /**
  Creates a lwt thread, with the entry function pointer fn,
@@ -549,10 +499,11 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 {
 	__lwt_main_thread_init();
 	
-	if (__dead_q.size == 0)
+	if (lwt_queue_size(&__dead_q) == 0)
 		__lwt_init_tcb_pool();
 		
-	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
+//	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
+	lwt_t new_lwt = lwt_queue_dequeue(&__dead_q);
 	new_lwt->id = __lwt_get_next_threadid();
 	new_lwt->status = LWT_S_CREATED;
 	new_lwt->prev = NULL;
@@ -560,10 +511,12 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	new_lwt->entry_fn = fn;
 	new_lwt->entry_fn_param = data;
 	new_lwt->return_val = NULL;
+	new_lwt->queue = NULL;
 	
 	__lwt_create_init_stack(new_lwt, fn, data);
 	
-	__lwt_q_inqueue(&__run_q, new_lwt);
+//	__lwt_q_inqueue(&__run_q, new_lwt);
+	lwt_queue_inqueue(&__run_q, new_lwt);
 	
 	__lwt_info.num_runnable++;
 	
@@ -575,6 +528,7 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
  */
 void lwt_yield(lwt_t target)
 {
+/*
 	// Only one thread running
 	if (__run_q.head == __run_q.tail)
 		return;
@@ -593,6 +547,29 @@ void lwt_yield(lwt_t target)
 	next_lwt = __run_q.head;
 
 	printf("%p: yield to %p.\n", current_lwt, next_lwt);
+*/
+
+	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
+	lwt_queue_inqueue(&__run_q, current_lwt);
+	current_lwt->status = LWT_S_READY;
+
+	if (target)
+	{
+		if (target->status == LWT_S_BLOCKED)
+		{
+			lwt_queue_remove(&__wait_q, target);
+			lwt_queue_inqueue(&__run_q, target);
+		}
+		else if (target->status == LWT_S_READY)
+		{
+			lwt_queue_remove(&__run_q, target);
+			lwt_queue_inqueue(&__run_q, target);
+		}
+	}
+	
+	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	next_lwt->status = LWT_S_RUNNING;
+
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
@@ -613,7 +590,10 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
 	while(lwt->status != LWT_S_FINISHED)
-		lwt_yield(NULL);
+	{
+//		lwt_yield(NULL);
+		__lwt_block();
+	}
 	__lwt_info.num_zombies--;
 	__lwt_info.num_blocked--;
 	__lwt_info.num_runnable++;
@@ -622,7 +602,8 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	if (retval_ptr)
 		*retval_ptr = lwt->return_val;
 
-	__lwt_q_inqueue(&__dead_q, lwt);
+//	__lwt_q_inqueue(&__dead_q, lwt);
+	lwt_queue_inqueue(&__dead_q, lwt);
 	return 0;
 }
 
@@ -633,7 +614,8 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 void lwt_die(void *data)
 {
 	// head always points to the current thread
-	lwt_t lwt_finished = __lwt_q_dequeue(&__run_q);
+//	lwt_t lwt_finished = __lwt_q_dequeue(&__run_q);
+	lwt_t lwt_finished = lwt_queue_dequeue(&__run_q);
 	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
 
@@ -643,9 +625,11 @@ void lwt_die(void *data)
 
 	__lwt_info.num_zombies++;
 	__lwt_info.num_runnable--;
-	
-	// switch to the next available thread
-	__lwt_dispatch(__run_q.head, lwt_finished);
+
+	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	next_lwt->status = LWT_S_RUNNING;
+
+	__lwt_dispatch(next_lwt, lwt_finished);
 }
 
 /**
@@ -653,7 +637,8 @@ void lwt_die(void *data)
  */
 lwt_t lwt_current()
 {
-	return __run_q.head;
+//	return __run_q.head;
+	return lwt_queue_peek(&__run_q);
 }
 
 /**
@@ -680,5 +665,284 @@ size_t lwt_info(lwt_info_type_t type)
 		default:
 			return __lwt_info.num_zombies;
 	}
+}
+
+// ===================================================================
+// lwt channel
+// ===================================================================
+struct __lwt_chan_t__
+{
+	/**
+	 Channel's name
+	 */
+	char *name;
+	
+	/**
+	 Sender's data
+	 */
+	void *snd_data;
+	
+	/**
+	 Sender queue
+	 */
+	dlinkedlist_t *s_queue;
+	
+	/**
+	 Indicates whether a receiver is blocked on this channel
+	 */
+	int rcv_blocked;
+	
+	/**
+	 The receiver thread
+	 */
+	lwt_t receiver;
+	
+	/**
+	 Sender's data buffer
+	 */
+	ring_queue_t *snd_buffer;
+	
+	/**
+	 Sender's data buffer size;
+	 */
+	size_t snd_buffer_size;
+	
+	/**
+	 Number of sending threads
+	 */
+	size_t snd_cnt;
+	
+	/**
+	 Sender list
+	 */
+	dlinkedlist_t *s_list;
+	
+};
+
+void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void *data);
+void __lwt_snd_buffered(lwt_chan_t c, void *data);
+
+void* __lwt_rcv_blocked(lwt_chan_t c);
+void* __lwt_rcv_buffered(lwt_chan_t c);
+
+int __lwt_chan_use_buffer(lwt_chan_t c);
+void __lwt_chan_set_name(lwt_chan_t c, const char *name);
+
+void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz);
+void __lwt_chan_free_snd_buffer(lwt_chan_t c);
+int __lwt_chan_try_to_free(lwt_chan_t *c);
+
+int __lwt_chan_use_buffer(lwt_chan_t c)
+{
+	return c->snd_buffer_size > 0;
+}
+
+void __lwt_chan_set_name(lwt_chan_t c, const char *name)
+{
+	if (name)
+	{
+		size_t sz = strlen(name) + 1;
+		c->name = calloc(sz, sizeof(char));
+		strncpy(c->name, name, sz-1);
+		c->name[sz-1] = '\0';
+	}
+	else
+	{
+		c->name = calloc(1, sizeof(char));
+		c->name[0] = '\0';
+	}
+}
+
+void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz)
+{
+	c->snd_buffer_size = sz;
+	if (sz == 0)
+		c->snd_buffer = NULL;
+	else
+	{
+		c->snd_buffer = ring_queue_init(sz);
+	}
+}
+
+void __lwt_chan_free_snd_buffer(lwt_chan_t c)
+{
+	if (c->snd_buffer)
+		ring_queue_free(&(c->snd_buffer));
+}
+
+int __lwt_chan_try_to_free(lwt_chan_t *c)
+{
+	if (!((*c)->receiver) && dlinkedlist_size((*c)->s_list) == 0)
+	{
+		__lwt_chan_free_snd_buffer(*c);
+		free((*c)->name);
+		free(*c);
+		*c = NULL;
+		return 1;
+	}
+	else
+		return 0;
+}
+
+void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void *data)
+{
+	// Add sndr to sender queue
+	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+	// spinning if it is not my turn
+	while (dlinkedlist_first(c->s_queue)->data != sndr)
+		lwt_yield(NULL);
+	
+	// now it is my turn, set the data
+	c->snd_data = data;
+	
+	// spinning if it is my turn but no receiver is blocked on this channel
+	while (!c->rcv_blocked)
+		lwt_yield(NULL);
+	
+	// Now the receiver is ready to receive, yield to it
+	lwt_yield(c->receiver);
+}
+
+void __lwt_snd_buffered(lwt_chan_t c, void *data)
+{
+	assert(c->snd_buffer);
+	
+	while (ring_queue_full(c->snd_buffer))
+		lwt_yield(NULL);
+	
+	ring_queue_inqueue(c->snd_buffer, data);
+}
+
+void* __lwt_rcv_blocked(lwt_chan_t c)
+{
+	// spinning if nobody is sending on this channel
+	while (dlinkedlist_size(c->s_queue) == 0)
+	{
+		c->rcv_blocked = 1;
+		lwt_yield(NULL);
+	}
+	
+	// now the data has been sent via the channel, get it, and set receiver's status to non-blocked
+	void *data = c->snd_data;
+	c->snd_data = NULL;
+	c->rcv_blocked = 0;
+	
+	// remove sender from the sender queue
+	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
+	dlinkedlist_remove(c->s_queue, e);
+	dlinkedlist_element_free(&e);
+	
+	return data;
+}
+
+void* __lwt_rcv_buffered(lwt_chan_t c)
+{
+	assert(c->snd_buffer);
+	
+	// spinning if buffer is empty
+	while (ring_queue_empty(c->snd_buffer))
+		lwt_yield(NULL);
+	
+	void* data = ring_queue_dequeue(c->snd_buffer);
+	return data;
+}
+
+// =======================================================
+
+lwt_chan_t lwt_chan(size_t sz, const char *name)
+{
+	lwt_chan_t chan = malloc(sizeof(struct __lwt_chan_t__));
+	chan->s_list = dlinkedlist_init();
+	chan->s_queue = dlinkedlist_init();
+	chan->snd_data = NULL;
+	chan->rcv_blocked = 0;
+	chan->receiver = lwt_current();
+	
+	__lwt_chan_set_name(chan, name);
+	__lwt_chan_init_snd_buffer(chan, sz);
+	
+	return chan;
+}
+
+int lwt_chan_deref(lwt_chan_t *c)
+{
+	if (!c || !(*c))
+		return -1;
+	
+	lwt_t cur_lwt = lwt_current();
+	if ((*c)->receiver == cur_lwt)
+		(*c)->receiver = NULL;
+	else
+	{
+		dlinkedlist_element_t *e = dlinkedlist_find((*c)->s_list, cur_lwt);
+		if (e)
+			dlinkedlist_remove((*c)->s_list, e);
+	}
+	
+	return __lwt_chan_try_to_free(c);
+}
+
+const char *lwt_chan_get_name(lwt_chan_t c)
+{
+	if (!c)
+		return NULL;
+	
+	return c->name;
+}
+
+int lwt_snd(lwt_chan_t c, void *data)
+{
+	assert(data);
+	assert(c);
+	
+	// No receiver exists, returns -1.
+	if (!c->receiver)
+		return -1;
+	
+	// Forbit receiver from sending to itself
+	lwt_t sndr = lwt_current();
+	if (c->receiver == sndr)
+		return -2;
+	
+	// If sndr has not sent on this channel before, add it to sender list
+	if (!dlinkedlist_find(c->s_list, sndr))
+		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
+	
+	if (__lwt_chan_use_buffer(c))
+	{
+		// Send data buffered
+		__lwt_snd_buffered(c, data);
+	}
+	else
+	{
+		// Send data blocked
+		__lwt_snd_blocked(sndr, c, data);
+	}
+	
+	return 0;
+}
+
+void *lwt_rcv(lwt_chan_t c)
+{
+	assert(c);
+	
+	if (__lwt_chan_use_buffer(c))
+	{
+		return __lwt_rcv_buffered(c);
+	}
+	else
+	{
+		return __lwt_rcv_blocked(c);
+	}
+}
+
+int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
+{
+	return lwt_snd(c, sc);
+}
+
+lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
+{
+	return lwt_rcv(c);
 }
 

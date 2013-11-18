@@ -9,11 +9,6 @@
 #ifndef lwt_h
 #define lwt_h
 
-/*==================================================*
- *													*
- *				Types Definition					*
- *													*
- *==================================================*/
 /**
  LWT_NULL: Defines the marco of a NULL thread descriptor
  */
@@ -27,7 +22,7 @@ typedef void*(*lwt_fn_t)(void*);
 /**
  lwt_t: Type of a pointer to a thread descriptor.
  */
-typedef struct __lwt_t__ *lwt_t;
+typedef struct __lwt_t__* lwt_t;
 
 /**
  lwt_status_t: Defines the status enum of a thread.
@@ -43,12 +38,6 @@ typedef enum __lwt_info_type_t__
 	LWT_INFO_NTHD_ZOMBIES,
 	LWT_INFO_NTHD_BLOCKED
 } lwt_info_type_t;
-
-/*==================================================*
- *													*
- *				Declaration							*
- *													*
- *==================================================*/
 
 /**
  Creates a lwt thread, with the entry function pointer fn,
@@ -91,7 +80,30 @@ int lwt_join(lwt_t lwt, void **retval_ptr);
  */
 size_t lwt_info(lwt_info_type_t type);
 
-// lwt channel support
-#include "lwt-chan.h"
+// ===================================================================
+// lwt channel
+// ===================================================================
+typedef struct __lwt_chan_t__ *lwt_chan_t;
+
+lwt_chan_t lwt_chan(size_t sz, const char *name);
+
+const char *lwt_chan_get_name(lwt_chan_t c);
+
+/**
+ Returns -1: channel c is NULL
+ Returns 1: channel c is freed;
+ Returns 0: channel c is not freed;
+ */
+int lwt_chan_deref(lwt_chan_t *c);
+
+/**
+ Returns -1: no existing receiver
+ Returns -2: cannot sending to itself
+ */
+int lwt_snd(lwt_chan_t c, void *data);
+int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
+
+void *lwt_rcv(lwt_chan_t c);
+lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
 
 #endif
