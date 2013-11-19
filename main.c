@@ -255,9 +255,23 @@ void test_lwt_chan()
 	lwt_join(chld2, &data);
 	lwt_join(chld1, &data);
 }
+
+void* fn_print(void* data)
+{
+	int* i = data;
+	printf("Thread: %d\n", *i);
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
-	test_lwt();
+//	test_lwt();
+	
+	int data = 10;
+	lwt_t chld1 = lwt_create(fn_print, &data);
+	lwt_yield(LWT_NULL);
+	
+	printf("end\n");
 	
 //	test_lwt_chan();
 

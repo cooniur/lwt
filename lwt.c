@@ -500,7 +500,6 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	if (lwt_queue_size(&__dead_q) == 0)
 		__lwt_init_tcb_pool();
 		
-//	lwt_t new_lwt = __lwt_q_dequeue(&__dead_q);
 	lwt_t new_lwt = lwt_queue_dequeue(&__dead_q);
 	new_lwt->id = __lwt_get_next_threadid();
 	new_lwt->status = LWT_S_CREATED;
@@ -513,7 +512,6 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	
 	__lwt_create_init_stack(new_lwt, fn, data);
 	
-//	__lwt_q_inqueue(&__run_q, new_lwt);
 	lwt_queue_inqueue(&__run_q, new_lwt);
 	
 	__lwt_info.num_runnable++;
@@ -526,27 +524,6 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
  */
 void lwt_yield(lwt_t target)
 {
-/*
-	// Only one thread running
-	if (__run_q.head == __run_q.tail)
-		return;
-	
-	if (target == __run_q.head)
-		return;
-	
-	lwt_t current_lwt = lwt_current();
-	lwt_t next_lwt;
-
-	if (target)
-		__lwt_q_queue_jmp(&__run_q, target);
-	else
-		__lwt_q_next(&__run_q);
-	
-	next_lwt = __run_q.head;
-
-	printf("%p: yield to %p.\n", current_lwt, next_lwt);
-*/
-
 	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
 	lwt_queue_inqueue(&__run_q, current_lwt);
 	current_lwt->status = LWT_S_READY;
@@ -588,10 +565,8 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
 	while(lwt->status != LWT_S_FINISHED)
-	{
-//		lwt_yield(NULL);
 		__lwt_block();
-	}
+
 	__lwt_info.num_zombies--;
 	__lwt_info.num_blocked--;
 	__lwt_info.num_runnable++;
@@ -600,7 +575,6 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
 	if (retval_ptr)
 		*retval_ptr = lwt->return_val;
 
-//	__lwt_q_inqueue(&__dead_q, lwt);
 	lwt_queue_inqueue(&__dead_q, lwt);
 	return 0;
 }
@@ -611,8 +585,6 @@ int lwt_join(lwt_t lwt, void **retval_ptr)
  */
 void lwt_die(void *data)
 {
-	// head always points to the current thread
-//	lwt_t lwt_finished = __lwt_q_dequeue(&__run_q);
 	lwt_t lwt_finished = lwt_queue_dequeue(&__run_q);
 	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
@@ -635,7 +607,6 @@ void lwt_die(void *data)
  */
 lwt_t lwt_current()
 {
-//	return __run_q.head;
 	return lwt_queue_peek(&__run_q);
 }
 
