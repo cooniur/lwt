@@ -16,6 +16,8 @@
 #include "ring_queue.h"
 #include "dlinkedlist.h"
 
+//#define _DEBUG_
+
 /**
  Gets the offset of a field inside a struc
  */
@@ -293,6 +295,27 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void *data);
 extern void __lwt_trampoline();
 // =======================================================
 
+
+#ifndef _DEBUG_
+#define debug_showqueue(q, name)
+#else
+void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name)
+{
+	lwt_t cur = queue->head;
+	printf("%s: ", queue_name);
+	while (cur && (cur != queue->tail))
+	{
+		printf("%p, ", cur);
+		cur = cur->next;
+	}
+	printf("\n");
+}
+
+#define debug_showqueue(q, name) \
+	__lwt_debug_showqueue(q, name)
+#endif
+
+
 /**
  Initialize TCB pool
  */
@@ -514,6 +537,8 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
 	
 	lwt_queue_inqueue(&__run_q, new_lwt);
 	
+	debug_showqueue(__run_q, "run queue");
+	
 	__lwt_info.num_runnable++;
 	
 	return new_lwt;
@@ -524,9 +549,13 @@ lwt_t lwt_create(lwt_fn_t fn, void *data)
  */
 void lwt_yield(lwt_t target)
 {
+	debug_showqueue(__run_q, "run queue");
+
 	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
 	lwt_queue_inqueue(&__run_q, current_lwt);
 	current_lwt->status = LWT_S_READY;
+
+	debug_showqueue(__run_q, "run queue");
 
 	if (target)
 	{
@@ -914,4 +943,3 @@ lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
 {
 	return lwt_rcv(c);
 }
-
