@@ -44,7 +44,7 @@ typedef enum __lwt_info_type_t__
  and the parameter pointer data used by fn
  Returns lwt_t type
  */
-lwt_t lwt_create(lwt_fn_t fn, void *data);
+lwt_t lwt_create(lwt_fn_t fn, void* data);
 
 /**
  Yields to a specific thread. If NULL passed, yields to next available thread
@@ -55,7 +55,7 @@ void lwt_yield(lwt_t target);
  Kill the current thread.
  Return value is passed by data
  */
-void lwt_die(void *data);
+void lwt_die(void* data);
 
 /**
  Gets the current thread lwt_t
@@ -73,7 +73,7 @@ int lwt_id(lwt_t lwt);
  The pointer to the returned value will be passed via retval_ptr
  Returns -1 if fails to join; otherwise, 0
  */
-int lwt_join(lwt_t lwt, void **retval_ptr);
+int lwt_join(lwt_t lwt, void** retval_ptr);
 
 /**
  Gets the state of the lwt library
@@ -83,27 +83,38 @@ size_t lwt_info(lwt_info_type_t type);
 // ===================================================================
 // lwt channel
 // ===================================================================
-typedef struct __lwt_chan_t__ *lwt_chan_t;
+typedef struct __lwt_cgrp_t__* lwt_cgrp_t;
 
-lwt_chan_t lwt_chan(size_t sz, const char *name);
+typedef struct __lwt_chan_t__* lwt_chan_t;
 
-const char *lwt_chan_get_name(lwt_chan_t c);
+lwt_chan_t lwt_chan(size_t sz, const char* name);
 
 /**
  Returns -1: channel c is NULL
  Returns 1: channel c is freed;
  Returns 0: channel c is not freed;
  */
-int lwt_chan_deref(lwt_chan_t *c);
+int lwt_chan_deref(lwt_chan_t* c);
+
+const char* lwt_chan_get_name(lwt_chan_t c);
 
 /**
  Returns -1: no existing receiver
  Returns -2: cannot sending to itself
  */
-int lwt_snd(lwt_chan_t c, void *data);
+int lwt_snd(lwt_chan_t c, void* data);
 int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
 
-void *lwt_rcv(lwt_chan_t c);
+void* lwt_rcv(lwt_chan_t c);
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
+
+void* lwt_chan_mark_get(lwt_chan_t c);
+void lwt_chan_mark_set(lwt_chan_t c, void* tag);
+
+lwt_cgrp_t lwt_cgrp();
+int lwt_cgrp_free(lwt_cgrp_t* grp);
+int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c);
+int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c);
+lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp);
 
 #endif
