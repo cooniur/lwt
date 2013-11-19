@@ -13,14 +13,14 @@
 
 struct __dlst_t__
 {
-	dlinkedlist_element_t *first;
-	dlinkedlist_element_t *last;
+	dlinkedlist_element_t* first;
+	dlinkedlist_element_t* last;
 	size_t size;
 };
 
-dlinkedlist_t *dlinkedlist_init()
+dlinkedlist_t* dlinkedlist_init()
 {
-	dlinkedlist_t *list = malloc(sizeof(dlinkedlist_t));
+	dlinkedlist_t* list = malloc(sizeof(dlinkedlist_t));
 	if (!list)
 		return NULL;
 	
@@ -29,7 +29,7 @@ dlinkedlist_t *dlinkedlist_init()
 	return list;
 }
 
-void dlinkedlist_free(dlinkedlist_t **list)
+void dlinkedlist_free(dlinkedlist_t** list)
 {
 	if (list && *list)
 	{
@@ -40,9 +40,9 @@ void dlinkedlist_free(dlinkedlist_t **list)
 	}
 }
 
-dlinkedlist_element_t *dlinkedlist_element_init(void *data)
+dlinkedlist_element_t* dlinkedlist_element_init(void* data)
 {
-	dlinkedlist_element_t *e = malloc(sizeof(dlinkedlist_element_t));
+	dlinkedlist_element_t* e = malloc(sizeof(dlinkedlist_element_t));
 	e->data = data;
 	e->next = e->prev = NULL;
 	return e;
@@ -58,7 +58,7 @@ void dlinkedlist_element_free(dlinkedlist_element_t **e)
 	}
 }
 
-dlinkedlist_element_t *dlinkedlist_first(dlinkedlist_t *list)
+dlinkedlist_element_t* dlinkedlist_first(dlinkedlist_t* list)
 {
 	if (!list)
 		return NULL;
@@ -66,7 +66,7 @@ dlinkedlist_element_t *dlinkedlist_first(dlinkedlist_t *list)
 	return list->first;
 }
 
-dlinkedlist_element_t *dlinkedlist_last(dlinkedlist_t *list)
+dlinkedlist_element_t* dlinkedlist_last(dlinkedlist_t* list)
 {
 	if (!list)
 		return NULL;
@@ -74,15 +74,15 @@ dlinkedlist_element_t *dlinkedlist_last(dlinkedlist_t *list)
 	return list->last;
 }
 
-size_t dlinkedlist_size(dlinkedlist_t *list)
+size_t dlinkedlist_size(dlinkedlist_t* list)
 {
 	if (!list)
 		return 0;
-	else
-		return list->size;
+
+	return list->size;
 }
 
-int dlinkedlist_add(dlinkedlist_t *list, dlinkedlist_element_t *e)
+int dlinkedlist_add(dlinkedlist_t* list, dlinkedlist_element_t* e)
 {
 	if (!list)
 		return -1;
@@ -102,6 +102,7 @@ int dlinkedlist_add(dlinkedlist_t *list, dlinkedlist_element_t *e)
 		list->last->next = e;
 		e->prev = list->last;
 		e->next = list->first;
+		list->first->prev = e;
 		list->last = e;
 	}
 	
@@ -109,7 +110,7 @@ int dlinkedlist_add(dlinkedlist_t *list, dlinkedlist_element_t *e)
 	return 0;
 }
 
-dlinkedlist_element_t *dlinkedlist_find(dlinkedlist_t *list, void *data)
+dlinkedlist_element_t* dlinkedlist_find(dlinkedlist_t* list, void* data)
 {
 	if (!list || !data)
 		return NULL;
@@ -117,7 +118,7 @@ dlinkedlist_element_t *dlinkedlist_find(dlinkedlist_t *list, void *data)
 	if (dlinkedlist_size(list) == 0)
 		return NULL;
 	
-	dlinkedlist_element_t *ret = NULL;
+	dlinkedlist_element_t* ret = NULL;
 	dlinkedlist_foreach_element(e, list)
 	{
 		if (e->data == data)
@@ -130,7 +131,7 @@ dlinkedlist_element_t *dlinkedlist_find(dlinkedlist_t *list, void *data)
 	return ret;
 }
 
-int dlinkedlist_remove(dlinkedlist_t *list, dlinkedlist_element_t *e)
+int dlinkedlist_remove(dlinkedlist_t* list, dlinkedlist_element_t* e)
 {
 	if (!list)
 		return -1;

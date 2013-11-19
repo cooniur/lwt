@@ -700,7 +700,20 @@ size_t lwt_info(lwt_info_type_t type)
 // ===================================================================
 struct __lwt_cgrp_t__
 {
+	/**
+	 Channels in the group
+	 */
+	dlinkedlist_t* channel_list;
+
+	/**
+	 Waiting thread
+	 */
+	lwt_t wait_lwt;
 	
+	/**
+	 Total number of pending events
+	 */
+	size_t total_pending_events_num;
 };
 
 struct __lwt_chan_t__
@@ -759,6 +772,11 @@ struct __lwt_chan_t__
 	 Belonging Channel group
 	 */
 	struct __lwt_cgrp_t__* grp;
+	
+	/**
+	 Number of events in this channel
+	 */
+	size_t events_num;
 };
 
 void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data);
@@ -847,8 +865,6 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 
 void __lwt_snd_buffered(lwt_chan_t c, void* data)
 {
-	assert(c->snd_buffer);
-	
 	while (ring_queue_full(c->snd_buffer))
 		lwt_yield(NULL);
 	
@@ -879,8 +895,6 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 
 void* __lwt_rcv_buffered(lwt_chan_t c)
 {
-	assert(c->snd_buffer);
-	
 	// spinning if buffer is empty
 	while (ring_queue_empty(c->snd_buffer))
 		lwt_yield(NULL);
@@ -934,9 +948,6 @@ const char* lwt_chan_get_name(lwt_chan_t c)
 
 int lwt_snd(lwt_chan_t c, void* data)
 {
-	assert(data);
-	assert(c);
-	
 	// No receiver exists, returns -1.
 	if (!c->receiver)
 		return -1;
@@ -949,7 +960,13 @@ int lwt_snd(lwt_chan_t c, void* data)
 	// If sndr has not sent on this channel before, add it to sender list
 	if (!dlinkedlist_find(c->s_list, sndr))
 		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
-	
+
+	if (c->grp)
+	{
+		c->grp->total_pending_events_num++;
+		c->events_num++;
+	}
+
 	if (__lwt_chan_use_buffer(c))
 	{
 		// Send data buffered
@@ -960,22 +977,27 @@ int lwt_snd(lwt_chan_t c, void* data)
 		// Send data blocked
 		__lwt_snd_blocked(sndr, c, data);
 	}
-	
 	return 0;
 }
 
 void* lwt_rcv(lwt_chan_t c)
 {
-	assert(c);
-	
+	void* ret = NULL;
 	if (__lwt_chan_use_buffer(c))
 	{
-		return __lwt_rcv_buffered(c);
+		ret = __lwt_rcv_buffered(c);
 	}
 	else
 	{
-		return __lwt_rcv_blocked(c);
+		ret = __lwt_rcv_blocked(c);
 	}
+	
+	if (c->grp)
+	{
+		c->grp->total_pending_events_num--;
+		c->events_num--;
+	}
+	return ret;
 }
 
 int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
@@ -1007,26 +1029,73 @@ void lwt_chan_mark_set(lwt_chan_t c, void* tag)
 lwt_cgrp_t lwt_cgrp()
 {
 	lwt_cgrp_t grp = malloc(sizeof(struct __lwt_cgrp_t__));
+	grp->channel_list = dlinkedlist_init();
+	grp->total_pending_events_num = 0;
+	grp->wait_lwt = 0;
 	return grp;
 }
 
 int lwt_cgrp_free(lwt_cgrp_t* grp)
 {
+	if (grp && (*grp))
+	{
+		if ((*grp)->total_pending_events_num > 0)
+			return -1;
+
+		dlinkedlist_free(&((*grp)->channel_list));
+		free(*grp);
+		*grp = NULL;
+	}
 	return 0;
 }
 
 int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c)
 {
+	if (c->grp)
+		return -1;
+
+	if (!dlinkedlist_find(grp->channel_list, c))
+	{
+		dlinkedlist_element_t* e = dlinkedlist_element_init(c);
+		dlinkedlist_add(grp->channel_list, e);
+		c->grp = grp;
+		c->events_num = 0;
+	}
+	
 	return 0;
 }
 
 int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 {
+	if (c->events_num > 0)
+		return 1;
+	
+	dlinkedlist_element_t* e = dlinkedlist_find(grp->channel_list, c);
+	if (e)
+	{
+		dlinkedlist_remove(grp->channel_list, e);
+		c->events_num = 0;
+		c->grp = NULL;
+	}
 	return 0;
 }
 
 lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
 {
-	return NULL;
+	size_t prev_events_num = grp->total_pending_events_num;
+	while (prev_events_num == grp->total_pending_events_num)
+	{
+		lwt_yield(NULL);
+	}
+	
+	lwt_chan_t c = NULL;
+	dlinkedlist_foreach_element(e, grp->channel_list)
+	{
+		c = e->data;
+		if (c->events_num > 0)
+			break;
+	}
+	
+	return c;
 }
 
