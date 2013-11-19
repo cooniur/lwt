@@ -432,7 +432,6 @@ static void __lwt_main_thread_init()
 	__main_thread->stack = NULL;
 	__main_thread->next = NULL;
 	
-//	__lwt_q_inqueue(&__run_q, __main_thread);
 	lwt_queue_inqueue(&__run_q, __main_thread);
 }
 
@@ -833,14 +832,14 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
 	// spinning if it is not my turn
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
-		__lwt_block();
+		lwt_yield(NULL);
 	
 	// now it is my turn, set the data
 	c->snd_data = data;
 	
 	// spinning if it is my turn but no receiver is blocked on this channel
 	while (!c->rcv_blocked)
-		__lwt_block();
+		lwt_yield(NULL);
 	
 	// Now the receiver is ready to receive, yield to it
 	lwt_yield(c->receiver);
@@ -851,7 +850,7 @@ void __lwt_snd_buffered(lwt_chan_t c, void* data)
 	assert(c->snd_buffer);
 	
 	while (ring_queue_full(c->snd_buffer))
-		__lwt_block();
+		lwt_yield(NULL);
 	
 	ring_queue_inqueue(c->snd_buffer, data);
 }
@@ -862,7 +861,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
 		c->rcv_blocked = 1;
-		__lwt_block();
+		lwt_yield(NULL);
 	}
 	
 	// now the data has been sent via the channel, get it, and set receiver's status to non-blocked
@@ -874,7 +873,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
 	dlinkedlist_remove(c->s_queue, e);
 	dlinkedlist_element_free(&e);
-	
+
 	return data;
 }
 
@@ -884,7 +883,7 @@ void* __lwt_rcv_buffered(lwt_chan_t c)
 	
 	// spinning if buffer is empty
 	while (ring_queue_empty(c->snd_buffer))
-		__lwt_block();
+		lwt_yield(NULL);
 	
 	void* data = ring_queue_dequeue(c->snd_buffer);
 	return data;
