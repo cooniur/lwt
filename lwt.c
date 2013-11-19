@@ -35,19 +35,6 @@
 #define TCB_POOL_SIZE (64)
 
 /**
- Thread status enum
- */
-enum __lwt_status_t__
-{
-	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
-	LWT_S_READY,			// Thread is switched out, and ready to be switched to
-	LWT_S_RUNNING,			// Thread is running
-	LWT_S_BLOCKED,			// Thread is blocked and in wait queue
-	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
-	LWT_S_DEAD				// Thread is joined and finally dead.
-};
-
-/**
  Thread counter
  */
 struct __lwt_info_t__
@@ -133,6 +120,11 @@ struct __lwt_t__
 	 Offset: 0x28
 	 */
 	struct __lwt_t__* prev;
+	
+	/**
+	 Flags
+	 */
+	lwt_flags_t flags;
 	
 } __attribute__ ((aligned (16), packed));
 
@@ -371,6 +363,7 @@ lwt_t __lwt_init_lwt()
 	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
 	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
 	new_lwt->esp = new_lwt->ebp;
+	new_lwt->flags = LWT_F_NONE;
 	return new_lwt;
 }
 
@@ -541,7 +534,7 @@ void __lwt_wakeup_all()
  and the parameter pointer data used by fn
  Returns lwt_t type
  */
-lwt_t lwt_create(lwt_fn_t fn, void* data)
+lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
 {
 	__lwt_main_thread_init();
 	
@@ -557,6 +550,7 @@ lwt_t lwt_create(lwt_fn_t fn, void* data)
 	new_lwt->entry_fn_param = data;
 	new_lwt->return_val = NULL;
 	new_lwt->queue = NULL;
+	new_lwt->flags = flags;
 	
 	__lwt_create_init_stack(new_lwt, fn, data);
 	
@@ -567,6 +561,14 @@ lwt_t lwt_create(lwt_fn_t fn, void* data)
 	__lwt_info.num_runnable++;
 	
 	return new_lwt;
+}
+
+lwt_status_t lwt_status(lwt_t lwt)
+{
+	if (!lwt)
+		return LWT_S_DEAD;
+	
+	return lwt->status;
 }
 
 /**
@@ -614,23 +616,33 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 
 	if (lwt->status == LWT_S_DEAD)
 		return -1;
-
+	
 	// Spinning until the joining thread finishes.
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
-	while(lwt->status != LWT_S_FINISHED)
-		__lwt_block();
 
-	__lwt_info.num_zombies--;
+	int ret = 0;
+	// Thread is joinable
+	if (!(lwt->flags & LWT_F_NOJOIN))
+	{
+		while(lwt->status <= LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
+			__lwt_block();
+
+		lwt->status = LWT_S_DEAD;
+		if (retval_ptr)
+			*retval_ptr = lwt->return_val;
+		lwt_queue_inqueue(&__dead_q, lwt);
+		__lwt_info.num_zombies--;
+		ret = 0;
+	}
+	else
+	{
+		ret = -2;
+	}
+	
 	__lwt_info.num_blocked--;
 	__lwt_info.num_runnable++;
-	
-	lwt->status = LWT_S_DEAD;
-	if (retval_ptr)
-		*retval_ptr = lwt->return_val;
-
-	lwt_queue_inqueue(&__dead_q, lwt);
-	return 0;
+	return ret;
 }
 
 /**
@@ -647,8 +659,17 @@ void lwt_die(void* data)
 	lwt_finished->entry_fn = NULL;
 	lwt_finished->entry_fn_param = NULL;
 
-	__lwt_info.num_zombies++;
+	if (lwt_finished->flags & LWT_F_NOJOIN)
+	{
+		lwt_finished->status = LWT_S_DEAD;
+		lwt_queue_inqueue(&__dead_q, lwt_finished);
+	}
+	else
+	{
+		__lwt_info.num_zombies++;
+	}
 	__lwt_info.num_runnable--;
+	
 
 	if (lwt_queue_size(&__run_q) == 0)
 		__lwt_wakeup_all();
@@ -752,12 +773,7 @@ struct __lwt_chan_t__
 	 Sender's data buffer size;
 	 */
 	size_t snd_buffer_size;
-	
-	/**
-	 Number of sending threads
-	 */
-	size_t snd_cnt;
-	
+		
 	/**
 	 Sender list
 	 */
@@ -1024,6 +1040,14 @@ void lwt_chan_mark_set(lwt_chan_t c, void* tag)
 		return;
 	
 	c->tag = tag;
+}
+
+size_t lwt_chan_sending_count(lwt_chan_t c)
+{
+	if (!c)
+		return 0;
+	
+	return dlinkedlist_size(c->s_list);
 }
 
 lwt_cgrp_t lwt_cgrp()

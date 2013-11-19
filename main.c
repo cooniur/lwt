@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include <lwt.h>
+#include "lwt.h"
 
 #define rdtscll(val) __asm__ __volatile__("rdtsc" : "=A" (val))
 
@@ -70,7 +70,7 @@ test_perf(void)
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {
 		chld1 = lwt_create(fn_null, NULL, 0);
-		lwt_join(chld1);
+		lwt_join(chld1, NULL);
 	}
 	rdtscll(end);
 	printf("[PERF] %lld <- fork/join\n", (end-start)/ITER);
@@ -78,8 +78,8 @@ test_perf(void)
 
 	chld1 = lwt_create(fn_bounce, (void*)1, 0);
 	chld2 = lwt_create(fn_bounce, NULL, 0);
-	lwt_join(chld1);
-	lwt_join(chld2);
+	lwt_join(chld1, NULL);
+	lwt_join(chld2, NULL);
 	IS_RESET();
 }
 
@@ -99,7 +99,8 @@ fn_nested_joins(void *d)
 		lwt_die(NULL);
 	}
 	chld = lwt_create(fn_nested_joins, (void*)1, 0);
-	lwt_join(chld);
+	lwt_join(chld, NULL);
+	return NULL;
 }
 
 volatile int sched[2] = {0, 0};
@@ -127,8 +128,9 @@ fn_join(void *d)
 	lwt_t t = (lwt_t)d;
 	void *r;
 
-	r = lwt_join(d);
+	lwt_join(d, &r);
 	assert(r != (void*)0x37337);
+	return NULL;
 }
 
 void
@@ -143,22 +145,22 @@ test_crt_join_sched(void)
 
 	chld1 = lwt_create(fn_sequence, (void*)1, 0);
 	chld2 = lwt_create(fn_sequence, (void*)2, 0);
-	lwt_join(chld2);
-	lwt_join(chld1);	
+	lwt_join(chld2, NULL);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 
 	/* functional tests: join */
 	chld1 = lwt_create(fn_null, NULL, 0);
-	lwt_join(chld1);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 
 	chld1 = lwt_create(fn_null, NULL, 0);
 	lwt_yield(LWT_NULL);
-	lwt_join(chld1);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 
 	chld1 = lwt_create(fn_nested_joins, NULL, 0);
-	lwt_join(chld1);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 
 	/* functional tests: join only from parents */
@@ -166,20 +168,22 @@ test_crt_join_sched(void)
 	chld2 = lwt_create(fn_join, chld1, 0);
 	lwt_yield(LWT_NULL);
 	lwt_yield(LWT_NULL);
-	lwt_join(chld2);
-	lwt_join(chld1);
+	lwt_join(chld2, NULL);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 
 	/* functional tests: passing data between threads */
 	chld1 = lwt_create(fn_identity, (void*)0x37337, 0);
-	assert((void*)0x37337 == lwt_join(chld1));
+	void* data;
+	lwt_join(chld1, &data);
+	assert((void*)0x37337 == data);
 	IS_RESET();
 
 	/* functional tests: directed yield */
 	chld1 = lwt_create(fn_null, NULL, 0);
 	lwt_yield(chld1);
 	assert(lwt_info(LWT_INFO_NTHD_ZOMBIES) == 1);
-	lwt_join(chld1);
+	lwt_join(chld1, NULL);
 	IS_RESET();
 }
 
@@ -190,14 +194,14 @@ fn_chan(void *data)
 	lwt_chan_t to = data;
 	int i;
 	
-	from = lwt_chan(0);
+	from = lwt_chan(0, "f");
 	lwt_snd_chan(to, from);
-	assert(from->snd_cnt);
+	assert(lwt_chan_sending_count(from));
 	for (i = 0 ; i < ITER ; i++) {
 		lwt_snd(to, (void*)1);
 		assert(2 == (int)lwt_rcv(from));
 	}
-	lwt_chan_deref(from);
+	lwt_chan_deref(&from);
 	
 	return NULL;
 }
@@ -210,23 +214,24 @@ test_perf_channels(int chsz)
 	int i;
 	unsigned long long start, end;
 
-	assert(LWT_RUNNING == lwt_current()->state);
-	from = lwt_chan(chsz);
+	assert(LWT_S_RUNNING == lwt_status(lwt_current()));
+	from = lwt_chan(chsz, "bf");
 	assert(from);
-	lwt_chan_grant(from);
+//	lwt_chan_grant(from);
 	t    = lwt_create(fn_chan, from, 0);
 	to   = lwt_rcv_chan(from);
-	assert(to->snd_cnt);
+//	assert(to->snd_cnt);
+	assert(lwt_chan_sending_count(to));
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) {
 		assert(1 == (int)lwt_rcv(from));
 		lwt_snd(to, (void*)2);
 	}
-	lwt_chan_deref(to);
+	lwt_chan_deref(&to);
 	rdtscll(end);
 	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n", 
 	       (end-start)/(ITER*2), chsz);
-	lwt_join(t);
+	lwt_join(t, NULL);
 }
 
 struct multisend_arg {
@@ -260,12 +265,12 @@ test_multisend(int chsz)
 
 	printf("[TEST] multisend (channel buffer size %d)\n", chsz);
 
-	c  = lwt_chan(chsz);
+	c  = lwt_chan(chsz, "c");
 	assert(c);
 	for (i = 0 ; i < 2 ; i++) {
 		args[i].c       = c;
 		args[i].snd_val = i+1;
-		lwt_chan_grant(c);
+		//lwt_chan_grant(c);
 	}
 	t1 = lwt_create(fn_snder, &args[0], 0);
 	t2 = lwt_create(fn_snder, &args[1], 0);
@@ -275,8 +280,8 @@ test_multisend(int chsz)
 		if (sndrcv_cnt > maxcnt) maxcnt = sndrcv_cnt;
 		sndrcv_cnt--;
 	}
-	lwt_join(t1);
-	lwt_join(t2);
+	lwt_join(t1, NULL);
+	lwt_join(t2, NULL);
 	
 	for (i = 0 ; i < ITER*2 ; i++) {
 		sum += ret[i];
@@ -305,7 +310,7 @@ fn_async_steam(void *data)
 	int i;
 	
 	for (i = 0 ; i < ITER ; i++) lwt_snd(to, (void*)(i+1));
-	lwt_chan_deref(to);
+	lwt_chan_deref(&to);
 	
 	return NULL;
 }
@@ -319,10 +324,10 @@ test_perf_async_steam(int chsz)
 	unsigned long long start, end;
 
 	async_sz = chsz;
-	assert(LWT_RUNNING == lwt_current()->state);
-	from = lwt_chan(chsz);
+	assert(LWT_S_RUNNING == lwt_status(lwt_current()));
+	from = lwt_chan(chsz, "af");
 	assert(from);
-	lwt_chan_grant(from);
+//	lwt_chan_grant(from);
 	t = lwt_create(fn_async_steam, from, 0);
 	assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 2);
 	rdtscll(start);
@@ -330,7 +335,7 @@ test_perf_async_steam(int chsz)
 	rdtscll(end);
 	printf("[PERF] %lld <- asynchronous snd->rcv (buffer size %d)\n",
 	       (end-start)/(ITER*2), chsz);
-	lwt_join(t);
+	lwt_join(t, NULL);
 }
 
 void *
@@ -347,6 +352,7 @@ fn_grpwait(void *d)
 		}
 		lwt_snd(c, (void*)lwt_id(lwt_current()));
 	}
+	return NULL;
 }
 
 #define GRPSZ 3
@@ -364,15 +370,17 @@ test_grpwait(int chsz, int grpsz)
 	g = lwt_cgrp();
 	assert(g);
 	
+	char name[255] = {0};
 	for (i = 0 ; i < grpsz ; i++) {
-		cs[i] = lwt_chan(chsz);
+		sprintf(name, "cs[%d]", i);
+		cs[i] = lwt_chan(chsz, name);
 		assert(cs[i]);
-		lwt_chan_grant(cs[i]);
+//		lwt_chan_grant(cs[i]);
 		ts[i] = lwt_create(fn_grpwait, cs[i], 0);
 		lwt_chan_mark_set(cs[i], (void*)lwt_id(ts[i]));
 		lwt_cgrp_add(g, cs[i]);
 	}
-	assert(lwt_cgrp_free(g) == -1);
+	assert(lwt_cgrp_free(&g) == -1);
 	/**
 	 * Q: why don't we iterate through all of the data here?
 	 * 
@@ -392,8 +400,8 @@ test_grpwait(int chsz, int grpsz)
 	}
 	for (i = 0 ; i < grpsz ; i++) {
 		lwt_cgrp_rem(g, cs[i]);
-		lwt_join(ts[i]);
-		lwt_chan_deref(cs[i]);
+		lwt_join(ts[i], NULL);
+		lwt_chan_deref(&cs[i]);
 	}
 	assert(!lwt_cgrp_free(g));
 	

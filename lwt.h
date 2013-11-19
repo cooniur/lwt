@@ -27,7 +27,21 @@ typedef struct __lwt_t__* lwt_t;
 /**
  lwt_status_t: Defines the status enum of a thread.
  */
-typedef enum __lwt_status_t__ lwt_status_t;
+typedef enum __lwt_status_t__
+{
+	LWT_S_CREATED = 0,		// Thread is just created. Stack is empty
+	LWT_S_READY,			// Thread is switched out, and ready to be switched to
+	LWT_S_RUNNING,			// Thread is running
+	LWT_S_BLOCKED,			// Thread is blocked and in wait queue
+	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
+	LWT_S_DEAD				// Thread is joined and finally dead.
+}lwt_status_t;
+
+typedef enum __lwt_flags_t__
+{
+	LWT_F_NONE = 0,
+	LWT_F_NOJOIN = 1
+} lwt_flags_t;
 
 /**
  lwt_info_type_t: Defines types of thread information
@@ -44,7 +58,9 @@ typedef enum __lwt_info_type_t__
  and the parameter pointer data used by fn
  Returns lwt_t type
  */
-lwt_t lwt_create(lwt_fn_t fn, void* data);
+lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags);
+
+lwt_status_t lwt_status(lwt_t lwt);
 
 /**
  Yields to a specific thread. If NULL passed, yields to next available thread
@@ -107,6 +123,8 @@ int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
 
 void* lwt_rcv(lwt_chan_t c);
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
+
+size_t lwt_chan_sending_count(lwt_chan_t c);
 
 void* lwt_chan_mark_get(lwt_chan_t c);
 void lwt_chan_mark_set(lwt_chan_t c, void* tag);
