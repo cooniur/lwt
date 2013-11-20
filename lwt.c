@@ -729,19 +729,14 @@ size_t lwt_info(lwt_info_type_t type)
 struct __lwt_cgrp_t__
 {
 	/**
-	 Channels in the group
+	 Event queue in the group
 	 */
-	dlinkedlist_t* channel_list;
-
-	/**
-	 Waiting thread
-	 */
-	lwt_t wait_lwt;
+	dlinkedlist_t* event_queue;
 	
 	/**
-	 Total number of pending events
+	 Number of channels in this group
 	 */
-	size_t total_pending_events_num;
+	size_t channel_num;
 };
 
 struct __lwt_chan_t__
@@ -997,8 +992,8 @@ int lwt_snd(lwt_chan_t c, void* data)
 
 	if (c->grp)
 	{
-		c->grp->total_pending_events_num++;
 		c->events_num++;
+		dlinkedlist_add(c->grp->event_queue, dlinkedlist_element_init(c));
 	}
 
 	if (__lwt_chan_use_buffer(c))
@@ -1028,11 +1023,6 @@ void* lwt_rcv(lwt_chan_t c)
 		ret = __lwt_rcv_blocked(c);
 	}
 	
-	if (c->grp)
-	{
-		c->grp->total_pending_events_num--;
-		c->events_num--;
-	}
 	return ret;
 }
 
@@ -1073,9 +1063,8 @@ size_t lwt_chan_sending_count(lwt_chan_t c)
 lwt_cgrp_t lwt_cgrp()
 {
 	lwt_cgrp_t grp = malloc(sizeof(struct __lwt_cgrp_t__));
-	grp->channel_list = dlinkedlist_init();
-	grp->total_pending_events_num = 0;
-	grp->wait_lwt = 0;
+	grp->event_queue = dlinkedlist_init();
+	grp->channel_num = 0;
 	return grp;
 }
 
@@ -1083,10 +1072,10 @@ int lwt_cgrp_free(lwt_cgrp_t* grp)
 {
 	if (grp && (*grp))
 	{
-		if ((*grp)->total_pending_events_num > 0)
+		if ((*grp)->channel_num > 0)
 			return -1;
 
-		dlinkedlist_free(&((*grp)->channel_list));
+		dlinkedlist_free(&((*grp)->event_queue));
 		free(*grp);
 		*grp = NULL;
 	}
@@ -1098,48 +1087,38 @@ int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c)
 	if (c->grp)
 		return -1;
 
-	if (!dlinkedlist_find(grp->channel_list, c))
-	{
-		dlinkedlist_element_t* e = dlinkedlist_element_init(c);
-		dlinkedlist_add(grp->channel_list, e);
-		c->grp = grp;
-		c->events_num = 0;
-	}
-	
+	c->grp = grp;
+	c->events_num = 0;
+	grp->channel_num++;
 	return 0;
 }
 
 int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 {
+	if (!c->grp || c->grp != grp)
+		return -1;
+	
 	if (c->events_num > 0)
 		return 1;
+
+	c->events_num = 0;
+	c->grp = NULL;
+	grp->channel_num--;
 	
-	dlinkedlist_element_t* e = dlinkedlist_find(grp->channel_list, c);
-	if (e)
-	{
-		dlinkedlist_remove(grp->channel_list, e);
-		c->events_num = 0;
-		c->grp = NULL;
-	}
 	return 0;
 }
 
 lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
 {
-	size_t prev_events_num = grp->total_pending_events_num;
-	while (prev_events_num == grp->total_pending_events_num)
+	while (dlinkedlist_size(grp->event_queue) == 0)
 	{
 		lwt_yield(NULL);
 	}
 	
-	lwt_chan_t c = NULL;
-	dlinkedlist_foreach_element(e, grp->channel_list)
-	{
-		c = e->data;
-		if (c->events_num > 0)
-			break;
-	}
-	
+	dlinkedlist_element_t* e = dlinkedlist_first(grp->event_queue);
+	dlinkedlist_remove(grp->event_queue, e);
+	lwt_chan_t c = e->data;
+	dlinkedlist_element_free(&e);
 	return c;
 }
 
