@@ -186,6 +186,7 @@ test_crt_join_sched(void)
 	assert(lwt_info(LWT_INFO_NTHD_ZOMBIES) == 1);
 	lwt_join(chld1, NULL);
 	IS_RESET();
+	printf("[TEST] thread creation/join/scheduling passed.\n");
 }
 
 void *
@@ -234,10 +235,9 @@ test_perf_channels(int chsz)
 	lwt_chan_deref(&to);
 	rdtscll(end);
 	
-	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n", 
-	       (end-start)/(ITER*2), chsz);
-	
 	lwt_join(t, NULL);
+	printf("[PERF] %lld <- snd+rcv (buffer size %d)\n",
+	       (end-start)/(ITER*2), chsz);
 }
 
 struct multisend_arg {
@@ -303,7 +303,7 @@ test_multisend(int chsz)
 	 * doubtful you are really doing asynchronous communication.
 	 */
 	assert(maxcnt >= chsz);
-
+	printf("[TEST] multisend (channel buffer size %d) passed.\n", chsz);
 	return;
 }
 
@@ -339,9 +339,9 @@ test_perf_async_steam(int chsz)
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) assert(i+1 == (int)lwt_rcv(from));
 	rdtscll(end);
+	lwt_join(t, NULL);
 	printf("[PERF] %lld <- asynchronous snd->rcv (buffer size %d)\n",
 	       (end-start)/(ITER*2), chsz);
-	lwt_join(t, NULL);
 }
 
 void *
@@ -410,7 +410,8 @@ test_grpwait(int chsz, int grpsz)
 		lwt_chan_deref(&cs[i]);
 	}
 	assert(!lwt_cgrp_free(g));
-	
+	printf("[TEST] group wait (channel buffer size %d, grpsz %d) passed.\n",
+	       chsz, grpsz);
 	return;
 }
 
