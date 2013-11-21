@@ -381,10 +381,10 @@ test_grpwait(int chsz, int grpsz)
 		sprintf(name, "cs[%d]", i);
 		cs[i] = lwt_chan(chsz, name);
 		assert(cs[i]);
-		lwt_cgrp_add(g, cs[i]);
 //		lwt_chan_grant(cs[i]);
 		ts[i] = lwt_create(fn_grpwait, cs[i], 0);
 		lwt_chan_mark_set(cs[i], (void*)lwt_id(ts[i]));
+		lwt_cgrp_add(g, cs[i]);
 	}
 	assert(lwt_cgrp_free(&g) == -1);
 	/**
