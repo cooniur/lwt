@@ -33,8 +33,6 @@
  */
 #define TCB_POOL_SIZE (64)
 
-#define __ATTR_ALWAYS_INLINE__ __attribute__((always_inline))
-
 /**
  Thread counter
  */
@@ -97,7 +95,7 @@ struct __lwt_t__
 	 Thread ID
 	 Offset: 0x1c
 	 */
-	size_t id;
+	int id;
 	
 	/**
 	 Stack Size
@@ -126,11 +124,6 @@ struct __lwt_t__
 	 Flags
 	 */
 	lwt_flags_t flags;
-
-	/**
-	 Indicates who has joined this thread
-	 */
-	lwt_t joiner;
 	
 } __attribute__ ((aligned (16), packed));
 
@@ -140,24 +133,22 @@ struct __lwt_t__
 struct __lwt_queue_t__
 {
 	struct __lwt_t__* head;
+	struct __lwt_t__* tail;
 	size_t size;
 };
 
-static struct __lwt_queue_t__*		lwt_queue_init();
-static inline size_t				lwt_queue_size(struct __lwt_queue_t__* queue);
-static inline int					lwt_queue_empty(struct __lwt_queue_t__* queue);
-static inline void					lwt_queue_insert_before(struct __lwt_queue_t__* queue, struct __lwt_t__* victim, struct __lwt_t__* lwt);
-static inline void					lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
-static inline struct __lwt_t__*		lwt_queue_head_next(struct __lwt_queue_t__* queue);
-static inline struct __lwt_t__*		lwt_queue_dequeue(struct __lwt_queue_t__* queue);
-static inline void					lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
-static inline struct __lwt_t__*		lwt_queue_peek(struct __lwt_queue_t__* queue);
-static inline struct __lwt_t__*		lwt_queue_peek_tail(struct __lwt_queue_t__* queue);
+struct __lwt_queue_t__*		lwt_queue_init();
+size_t						lwt_queue_size(struct __lwt_queue_t__* queue);
+void						lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
+struct __lwt_t__*			lwt_queue_dequeue(struct __lwt_queue_t__* queue);
+void						lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
+struct __lwt_t__*			lwt_queue_peek(struct __lwt_queue_t__* queue);
 
 struct __lwt_queue_t__* lwt_queue_init()
 {
 	struct __lwt_queue_t__* queue = malloc(sizeof(struct __lwt_queue_t__));
 	queue->head = NULL;
+	queue->tail = NULL;
 	queue->size = 0;
 	return queue;
 }
@@ -176,14 +167,14 @@ void lwt_queue_insert_before(struct __lwt_queue_t__* queue, struct __lwt_t__* vi
 {
 	assert(queue == victim->queue);
 
-	if (victim == queue->head)
-		queue->head = lwt;
-
 	victim->prev->next = lwt;
 	lwt->prev = victim->prev;
 
 	victim->prev = lwt;
 	lwt->next = victim;
+
+	if (victim == queue->head)
+		queue->head = lwt;
 
 	queue->size++;
 }
@@ -195,70 +186,62 @@ void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 		lwt->next = lwt;
 		lwt->prev = lwt;
 		queue->head = lwt;
+		queue->tail = lwt;
 	}
 	else
 	{
-		lwt->prev = queue->head->prev;
+		lwt->prev = queue->tail;
 		lwt->next = queue->head;
 
-		queue->head->prev->next = lwt;
+		queue->tail->next = lwt;
 		queue->head->prev = lwt;
+
+		queue->tail = lwt;
 	}
 	lwt->queue = queue;
 	queue->size++;
 }
 
-struct __lwt_t__* lwt_queue_head_next(struct __lwt_queue_t__* queue)
-{
-	assert(queue);
-	
-	struct __lwt_t__* old_head = queue->head;
-	queue->head = old_head->next;
-	return old_head;
-}
-
-
 struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 {
-	assert(queue);
-	
-	struct __lwt_t__* old_head = queue->head;
+	struct __lwt_t__* ret = queue->head;
 	
 	if (queue->size > 0)
 	{
 		queue->head = queue->head->next;
-
-		old_head->prev->next = queue->head;
-		queue->head->prev = old_head->prev;
+		queue->tail->next = queue->head;
+		queue->head->prev = queue->tail;
 	}
 	else
-		queue->head = NULL;
+		queue->head = queue->tail = NULL;
 	
-	queue->size--;
+	ret->prev = ret->next = NULL;
+	ret->queue = NULL;
 
-	old_head->prev = old_head->next = NULL;
-	old_head->queue = NULL;
-	return old_head;
+	queue->size--;
+	return ret;
 }
 
 void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 {
-	assert(queue);
-	assert(!lwt_queue_empty(queue));
-	assert(lwt);
 	assert(lwt->queue == queue);
+	assert(!lwt_queue_empty(queue));
 	assert(lwt->prev);
 	assert(lwt->next);
 	
-	if (lwt == queue->head)
-	{
-		lwt_queue_dequeue(queue);
-		return;
-	}
-	
-	lwt->prev->next = lwt->next;
-	lwt->next->prev = lwt->prev;
 	queue->size--;
+	if (lwt_queue_empty(queue))
+		queue->head = queue->tail = NULL;
+	else
+	{
+		lwt->prev->next = lwt->next;
+		lwt->next->prev = lwt->prev;
+	}
+
+	if (lwt == queue->head)
+		queue->head = lwt->next;
+	else if (lwt == queue->tail)
+		queue->tail = lwt->prev;
 
 	lwt->prev = lwt->next = NULL;
 	lwt->queue = NULL;
@@ -266,20 +249,11 @@ void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 
 struct __lwt_t__* lwt_queue_peek(struct __lwt_queue_t__* queue)
 {
-	if (!queue)
+	if (queue)
+		return queue->head;
+	else
 		return NULL;
-	
-	return queue->head;
 }
-
-struct __lwt_t__* lwt_queue_peek_tail(struct __lwt_queue_t__* queue)
-{
-	if (!queue)
-		return NULL;
-	
-	return queue->head->prev;
-}
-
 
 // =======================================================
 
@@ -287,18 +261,18 @@ struct __lwt_t__* lwt_queue_peek_tail(struct __lwt_queue_t__* queue)
  The Run Queue
  run_q.head always points to the current thread
  */
-struct __lwt_queue_t__ __run_q = {NULL, 0};
+struct __lwt_queue_t__ __run_q = {NULL, NULL, 0};
 
 /**
  The Wait Queue
  threads that are blocked will be added into this queue
  */
-struct __lwt_queue_t__ __wait_q = {NULL, 0};
+struct __lwt_queue_t__ __wait_q = {NULL, NULL, 0};
 
 /**
  The Dead Queue: recycled TCBs
  */
-struct __lwt_queue_t__ __dead_q = {NULL, 0};
+struct __lwt_queue_t__ __dead_q = {NULL, NULL, 0};
 
 /**
  The main thread TCB
@@ -329,12 +303,10 @@ static void __lwt_wakeup_all();
 
 static lwt_t	__lwt_init_lwt();
 static void		__lwt_init_tcb_pool();
+static int		__lwt_get_next_threadid();
 static void		__lwt_main_thread_init();
-static size_t	__lwt_get_next_threadid();
 
-static inline void		__lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
-
-static inline int	__lwt_flags_get_joinable(lwt_flags_t f);
+static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
 
 extern void __lwt_trampoline();
 // =======================================================
@@ -365,10 +337,6 @@ void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name
 	__lwt_debug_showqueue(q, name)
 #endif
 
-int __lwt_flags_get_joinable(lwt_flags_t f)
-{
-	return (f & LWT_F_NOJOIN);
-}
 
 /**
  Initialize TCB pool
@@ -405,7 +373,7 @@ lwt_t __lwt_init_lwt()
 /**
  Gets the next available thread id #
  */
-static size_t __lwt_get_next_threadid()
+static int __lwt_get_next_threadid()
 {
 	return __lwt_threadid++;
 }
@@ -650,35 +618,38 @@ void lwt_yield(lwt_t target)
  */
 int lwt_join(lwt_t lwt, void** retval_ptr)
 {
-	if (!lwt)
+	if (lwt_current() == lwt)
 		return -1;
-	
-	if (lwt == lwt_current())
-		return -1;
-	
-	if (lwt->status > LWT_S_FINISHED)
-		return -1;
-	
-	if (!__lwt_flags_get_joinable(lwt->flags))
+
+	if (lwt->status == LWT_S_DEAD)
 		return -1;
 	
 	// Spinning until the joining thread finishes.
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
 
+	int ret = 0;
 	// Thread is joinable
-	while(lwt->status < LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
-		__lwt_block();
-	
-	lwt->status = LWT_S_DEAD;
-	if (retval_ptr)
-		*retval_ptr = lwt->return_val;
-	lwt_queue_inqueue(&__dead_q, lwt);
-	__lwt_info.num_zombies--;
+	if (!(lwt->flags & LWT_F_NOJOIN))
+	{
+		while(lwt->status < LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
+			__lwt_block();
 
+		lwt->status = LWT_S_DEAD;
+		if (retval_ptr)
+			*retval_ptr = lwt->return_val;
+		lwt_queue_inqueue(&__dead_q, lwt);
+		__lwt_info.num_zombies--;
+		ret = 0;
+	}
+	else
+	{
+		ret = -2;
+	}
+	
 	__lwt_info.num_blocked--;
 	__lwt_info.num_runnable++;
-	return 0;
+	return ret;
 }
 
 /**
