@@ -99,6 +99,8 @@ int lwt_join(lwt_t lwt, void** retval_ptr);
  */
 size_t lwt_info(lwt_info_type_t type);
 
+void lwt_show_queue();
+
 // ===================================================================
 // lwt channel
 // ===================================================================

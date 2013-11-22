@@ -31,6 +31,25 @@
  * [TEST] group wait (channel buffer size 3, grpsz 3)
  */
 
+ /*
+  * Performance of this version:
+  * [PERF] 352 <- fork/join
+  * [PERF] 33 <- yield
+  * [TEST] thread creation/join/scheduling
+  * [TEST] thread creation/join/scheduling passed.
+  * [PERF] 455 <- snd+rcv (buffer size 0)
+  * [TEST] multisend (channel buffer size 0)
+  * [TEST] multisend (channel buffer size 0) passed.
+  * [PERF] test_perf_async_steam
+  * [PERF] 49 <- asynchronous snd->rcv (buffer size 100)
+  * [TEST] multisend (channel buffer size 100)
+  * [TEST] multisend (channel buffer size 100) passed.
+  * [TEST] group wait (channel buffer size 0, grpsz 3)
+  * [TEST] group wait (channel buffer size 0, grpsz 3) passed.
+  * [TEST] group wait (channel buffer size 3, grpsz 3)
+  * [TEST] group wait (channel buffer size 3, grpsz 3) passed. 
+  */
+
 void *
 fn_bounce(void *d) 
 {
@@ -55,7 +74,7 @@ fn_null(void *d)
 { return NULL; }
 
 #define IS_RESET()						\
-		printf("r:%uz, z:%uz, b:%uz\n", lwt_info(LWT_INFO_NTHD_RUNNABLE), lwt_info(LWT_INFO_NTHD_ZOMBIES), lwt_info(LWT_INFO_NTHD_BLOCKED)); \
+		//printf("r:%u, z:%u, b:%u\n", lwt_info(LWT_INFO_NTHD_RUNNABLE), lwt_info(LWT_INFO_NTHD_ZOMBIES), lwt_info(LWT_INFO_NTHD_BLOCKED)); \
         assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
 		lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
 		lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
@@ -316,9 +335,10 @@ fn_async_steam(void *data)
 	lwt_chan_t to = data;
 	int i;
 	
-	for (i = 0 ; i < ITER ; i++) lwt_snd(to, (void*)(i+1));
+	for (i = 0 ; i < ITER ; i++) 
+		lwt_snd(to, (void*)(i+1));
+
 	lwt_chan_deref(&to);
-	
 	return NULL;
 }
 
@@ -330,6 +350,8 @@ test_perf_async_steam(int chsz)
 	int i;
 	unsigned long long start, end;
 
+	printf("[PERF] test_perf_async_steam\n");
+
 	async_sz = chsz;
 	assert(LWT_S_RUNNING == lwt_status(lwt_current()));
 	from = lwt_chan(chsz, "af");
@@ -338,7 +360,8 @@ test_perf_async_steam(int chsz)
 	t = lwt_create(fn_async_steam, from, 0);
 	assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 2);
 	rdtscll(start);
-	for (i = 0 ; i < ITER ; i++) assert(i+1 == (int)lwt_rcv(from));
+	for (i = 0 ; i < ITER ; i++) 
+		assert(i+1 == (int)lwt_rcv(from));
 	rdtscll(end);
 	lwt_join(t, NULL);
 	printf("[PERF] %lld <- asynchronous snd->rcv (buffer size %d)\n",

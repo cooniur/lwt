@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <assert.h>
 #include <string.h>
+#include <execinfo.h>
 
 #include "lwt.h"
 #include "ring_queue.h"
@@ -130,7 +131,44 @@ struct __lwt_queue_t__
 {
 	struct __lwt_t__* head;
 	size_t size;
+	char name[8];
 };
+
+// =======================================================
+/**
+ The Run Queue
+ run_q.head always points to the current thread
+ */
+struct __lwt_queue_t__ __run_q = {NULL, 0, "r"};
+
+/**
+ The Wait Queue
+ threads that are blocked will be added into this queue
+ */
+struct __lwt_queue_t__ __wait_q = {NULL, 0, "w"};
+
+/**
+ The zombie queue
+ threads that have died but not joined will be added to this queue
+ */
+struct __lwt_queue_t__ __zombie_q = {NULL, 0, "z"};
+
+/**
+ The Dead Queue: recycled TCBs
+ */
+struct __lwt_queue_t__ __dead_q = {NULL, 0, "d"};
+
+/**
+ The main thread TCB
+ */
+lwt_t __main_thread = NULL;
+
+/**
+ Stores the next available thread id #
+ */
+int __lwt_threadid = 1;
+
+// =======================================================
 
 static struct __lwt_queue_t__*		lwt_queue_init();
 static inline size_t				lwt_queue_size(struct __lwt_queue_t__* queue);
@@ -142,6 +180,71 @@ static inline struct __lwt_t__*		lwt_queue_dequeue(struct __lwt_queue_t__* queue
 static inline void					lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt);
 static inline struct __lwt_t__*		lwt_queue_peek(struct __lwt_queue_t__* queue);
 static inline struct __lwt_t__*		lwt_queue_peek_tail(struct __lwt_queue_t__* queue);
+
+void __lwt_stack_trace()
+{
+	void *array[10];
+	size_t size;
+	char **strings;
+	size_t i;
+	
+	size = backtrace(array, 10);
+	strings = backtrace_symbols(array, size);
+	
+	printf (">>>>>>>>> Obtained %zd stack frames.\n", size);
+	
+	for (i = 0; i < size; i++)
+		printf (">>>>>>>>>> %s\n", strings[i]);
+	
+	free (strings);
+	printf (">>>>>>>>> End of stacktrace.\n", size);
+}
+
+void __lwt_debug_showqueue(struct __lwt_queue_t__* queue)
+{
+	static int count = 0;
+	lwt_t cur = queue->head;
+	printf("cur_lwt: %p. ", lwt_current());
+	printf("%s: ", queue->name);
+	size_t i = 0;
+	while (cur && i < queue->size)
+	{
+		printf("%p, ", cur);
+		cur = cur->next;
+		i++;
+		if (count++ > 10)
+			break;
+	}
+	printf("\n");
+	count = 0;
+}
+
+#ifndef Q_DEBUG
+#define debug_showqueue(q) ((void)0)
+#define debug_stacktrace() ((void)0)
+#else
+#define debug_showqueue(q) \
+	__lwt_debug_showqueue(q)
+#define debug_stacktrace() \
+	__lwt_stack_trace()
+#endif
+
+void lwt_show_queue(int q)
+{
+	switch (q)
+	{
+		case 1:
+			debug_showqueue(&__run_q);
+			break;
+
+		case 2:
+			debug_showqueue(&__wait_q);
+			break;
+
+		case 3:
+			debug_showqueue(&__zombie_q);
+	}
+}
 
 struct __lwt_queue_t__* lwt_queue_init()
 {
@@ -163,18 +266,23 @@ int lwt_queue_empty(struct __lwt_queue_t__* queue)
 
 void lwt_queue_insert_before(struct __lwt_queue_t__* queue, struct __lwt_t__* victim, struct __lwt_t__* lwt)
 {
-	assert(queue == victim->queue);
+	if (!victim)
+	{
+		lwt_queue_inqueue(queue, lwt);
+	}
+	else
+	{
+		assert(queue == victim->queue);
+		if (victim == queue->head)
+			queue->head = lwt;
 
-	if (victim == queue->head)
-		queue->head = lwt;
+		victim->prev->next = lwt;
+		lwt->prev = victim->prev;
 
-	victim->prev->next = lwt;
-	lwt->prev = victim->prev;
-
-	victim->prev = lwt;
-	lwt->next = victim;
-
-	queue->size++;
+		victim->prev = lwt;
+		lwt->next = victim;
+		queue->size++;
+	}
 }
 
 void lwt_queue_inqueue(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
@@ -212,7 +320,8 @@ struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 	assert(queue);
 	
 	struct __lwt_t__* old_head = queue->head;
-	
+	queue->size--;
+
 	if (queue->size > 0)
 	{
 		queue->head = queue->head->next;
@@ -222,8 +331,6 @@ struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 	}
 	else
 		queue->head = NULL;
-	
-	queue->size--;
 
 	old_head->prev = old_head->next = NULL;
 	old_head->queue = NULL;
@@ -232,10 +339,14 @@ struct __lwt_t__* lwt_queue_dequeue(struct __lwt_queue_t__* queue)
 
 void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 {
+//	debug_showqueue(queue);
+	// printf("%p->%p, %p\n", lwt, lwt->queue, queue);
+	// printf("r: %p\n", &__run_q);
+
 	assert(queue);
 	assert(!lwt_queue_empty(queue));
 	assert(lwt);
-//	assert(lwt->queue == queue);
+	assert(lwt->queue == queue);
 	assert(lwt->prev);
 	assert(lwt->next);
 
@@ -272,42 +383,6 @@ struct __lwt_t__* lwt_queue_peek_tail(struct __lwt_queue_t__* queue)
 	return queue->head->prev;
 }
 
-
-// =======================================================
-
-/**
- The Run Queue
- run_q.head always points to the current thread
- */
-struct __lwt_queue_t__ __run_q = {NULL, 0};
-
-/**
- The Wait Queue
- threads that are blocked will be added into this queue
- */
-struct __lwt_queue_t__ __wait_q = {NULL, 0};
-
-/**
- The zombie queue
- threads that have died but not joined will be added to this queue
- */
-struct __lwt_queue_t__ __zombie_q = {NULL, 0};
-
-/**
- The Dead Queue: recycled TCBs
- */
-struct __lwt_queue_t__ __dead_q = {NULL, 0};
-
-/**
- The main thread TCB
- */
-lwt_t __main_thread = NULL;
-
-/**
- Stores the next available thread id #
- */
-int __lwt_threadid = 1;
-
 // =======================================================
 /**
  A new thread's entry point
@@ -319,6 +394,7 @@ static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current)
 static inline lwt_t __lwt_current_inline();
 
 static void __lwt_block();
+static void __lwt_block_and_wakeup(lwt_t lwt);
 static void __lwt_wakeup(lwt_t blocked_lwt);
 static void __lwt_wakeup_all();
 
@@ -334,32 +410,6 @@ static inline void		__lwt_flags_set_nojoin(lwt_t lwt);
 
 extern void __lwt_trampoline();
 // =======================================================
-
-void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name)
-{
-	static int count = 0;
-	lwt_t cur = queue->head;
-	printf("%p: ", lwt_current());
-	printf("%s: ", queue_name);
-	size_t i = 0;
-	while (cur && i < queue->size)
-	{
-		printf("%p, ", cur);
-		cur = cur->next;
-		i++;
-		if (count++ > 10)
-			break;
-	}
-	printf("\n");
-	count = 0;
-}
-
-#ifndef Q_DEBUG
-#define debug_showqueue(q, name) ((void)0)
-#else
-#define debug_showqueue(q, name) \
-	__lwt_debug_showqueue(q, name)
-#endif
 
 int __lwt_flags_get_nojoin(lwt_t lwt)
 {
@@ -386,19 +436,9 @@ static void __lwt_init_tcb_pool()
 lwt_t __lwt_init_lwt()
 {
 	lwt_t new_lwt = (struct __lwt_t__*)malloc(sizeof(struct __lwt_t__));
-	new_lwt->id = __lwt_get_next_threadid();
-	new_lwt->status = LWT_S_DEAD;
-	new_lwt->prev = NULL;
-	new_lwt->next = NULL;
-	new_lwt->entry_fn = NULL;
-	new_lwt->entry_fn_param = NULL;
-	new_lwt->return_val = NULL;
-	
 	// creates stack
 	new_lwt->stack_size = DEFAULT_LWT_STACK_SIZE;
 	new_lwt->stack = malloc(sizeof(void) * new_lwt->stack_size);
-	new_lwt->ebp = new_lwt->stack + new_lwt->stack_size;
-	new_lwt->esp = new_lwt->ebp;
 	new_lwt->flags = LWT_F_NONE;
 	return new_lwt;
 }
@@ -487,12 +527,11 @@ void __lwt_start(lwt_fn_t fn, void* data)
 
 static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data)
 {
-	unsigned int* esp = lwt->esp;
 	void* lwt_start_stack;
 
-//	assert(lwt->stack);
 	lwt->ebp = lwt->stack + lwt->stack_size;
 	lwt->esp = lwt->ebp;
+	unsigned int* esp = lwt->esp;
 	
 	*esp = data;
 	esp--;
@@ -528,7 +567,6 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data)
 	*esp = 0xA;
 
 	lwt->esp = esp;
-	lwt->status = LWT_S_READY;
 }
 
 void __lwt_block()
@@ -539,10 +577,28 @@ void __lwt_block()
 	
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
+
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
-static void __lwt_wakeup(lwt_t blocked_lwt)
+void __lwt_block_and_wakeup(lwt_t lwt)
+{
+	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
+	current_lwt->status = LWT_S_BLOCKED;
+	lwt_queue_inqueue(&__wait_q, current_lwt);
+
+	if (lwt->status == LWT_S_BLOCKED)
+		lwt_queue_remove(&__wait_q, lwt);
+	else
+		lwt_queue_remove(&__run_q, lwt);
+
+	lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), lwt);
+	lwt->status = LWT_S_READY;
+
+	__lwt_dispatch(lwt, current_lwt);
+}
+
+void __lwt_wakeup(lwt_t blocked_lwt)
 {
 	if (blocked_lwt->status == LWT_S_BLOCKED)
 	{
@@ -583,21 +639,15 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
 		
 	lwt_t new_lwt = lwt_queue_dequeue(&__dead_q);
 	new_lwt->id = __lwt_get_next_threadid();
-	new_lwt->status = LWT_S_CREATED;
-	new_lwt->prev = NULL;
-	new_lwt->next = NULL;
+	new_lwt->status = LWT_S_READY;
 	new_lwt->entry_fn = fn;
 	new_lwt->entry_fn_param = data;
-	new_lwt->return_val = NULL;
-	new_lwt->queue = NULL;
 	new_lwt->flags = flags;
 	new_lwt->joiner = NULL;
 	
 	__lwt_create_init_stack(new_lwt, fn, data);
 	
 	lwt_queue_inqueue(&__run_q, new_lwt);
-	
-	debug_showqueue(&__run_q, "run queue");
 	
 	return new_lwt;
 }
@@ -615,13 +665,8 @@ lwt_status_t lwt_status(lwt_t lwt)
  */
 void lwt_yield(lwt_t target)
 {
-	debug_showqueue(&__run_q, "run queue");
-
-	lwt_t current_lwt = lwt_queue_dequeue(&__run_q);
-	lwt_queue_inqueue(&__run_q, current_lwt);
+	lwt_t current_lwt = lwt_queue_head_next(&__run_q);
 	current_lwt->status = LWT_S_READY;
-
-	debug_showqueue(&__run_q, "run queue");
 
 	if (target)
 	{
@@ -651,20 +696,21 @@ void lwt_yield(lwt_t target)
 int lwt_join(lwt_t lwt, void** retval_ptr)
 {
 	lwt_t cur_lwt = __lwt_current_inline();
+
 	if (!lwt)
 		return -1;
 
 	if (lwt == cur_lwt)
-		return -1;
+		return -2;
 
-	if (lwt->status > LWT_S_FINISHED)
-		return -1;
+	if (lwt->status > LWT_S_ZOMBIE)
+		return -3;
 
 	if (__lwt_flags_get_nojoin(lwt))
-		return -1;
+		return -4;
 
 	if (lwt->joiner)
-		return -1;
+		return -5;
 	
 	lwt->joiner = cur_lwt;
 
@@ -718,6 +764,11 @@ void lwt_die(void* data)
 	}
 	
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	// ??? is wakeup_all a good solution to avoid an empty run queue ???
+	if (!next_lwt)
+		__lwt_wakeup_all();
+
+	next_lwt = lwt_queue_peek(&__run_q);
 	assert(next_lwt);
 	next_lwt->status = LWT_S_RUNNING;
 	__lwt_dispatch(next_lwt, lwt_finished);
@@ -844,7 +895,7 @@ struct __lwt_chan_t__
 };
 
 void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data);
-void __lwt_snd_buffered(lwt_chan_t c, void* data);
+void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data);
 
 void* __lwt_rcv_blocked(lwt_chan_t c);
 void* __lwt_rcv_buffered(lwt_chan_t c);
@@ -915,8 +966,10 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	debug_print("%p: __lwt_snd_blocked: spinning not my turn.\n", lwt_current());
 	// spinning if it is not my turn
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
-		lwt_yield(NULL);
-	
+	{
+		__lwt_block();
+	}
+
 	// now it is my turn, set the data
 	c->snd_data = data;
 	
@@ -924,7 +977,7 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	debug_print("%p: __lwt_snd_blocked: spinning no rcv.\n", lwt_current());
 	while (!c->rcv_blocked && c->snd_data)
 	{
-		lwt_yield(NULL);
+		__lwt_block();
 	}
 	
 	// Now the receiver is ready to receive, yield to it
@@ -932,11 +985,25 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	lwt_yield(c->receiver);
 }
 
-void __lwt_snd_buffered(lwt_chan_t c, void* data)
+void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data)
 {
 	while (ring_queue_full(c->snd_buffer))
-		lwt_yield(NULL);
-	
+	{
+		debug_print("%p: __lwt_snd_buffered: blocking buffer full\n", lwt_current());
+		// insert into blocking queue 
+		// (c->s_queue is here used as a queue storing threads blocking on __lwt_snd_buffered)
+		dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+		debug_print("%p: __lwt_snd_buffered: call __lwt_block_and_wakeup %p\n", lwt_current(), c->receiver);
+		__lwt_block_and_wakeup(c->receiver);
+		debug_print("%p: __lwt_snd_buffered: after calling __lwt_block_and_wakeup\n", lwt_current());
+	}
+
+	// remove from the block queue
+	dlinkedlist_element_t* e = dlinkedlist_find(c->s_queue, sndr);
+	dlinkedlist_remove(c->s_queue, e);
+	dlinkedlist_element_free(&e);
+
+	debug_print("%p: __lwt_snd_buffered: buffer inqueue data %p\n", lwt_current(), data);
 	ring_queue_inqueue(c->snd_buffer, data);
 }
 
@@ -947,7 +1014,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
 		c->rcv_blocked = 1;
-		lwt_yield(NULL);
+		__lwt_block();
 	}
 	
 	debug_print("%p: __lwt_rcv_blocked: rcved %p.\n", lwt_current(), c->snd_data);
@@ -957,10 +1024,11 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	c->rcv_blocked = 0;
 	
 	// remove sender from the sender queue
-	dlinkedlist_element_t *e = dlinkedlist_first(c->s_queue);
+	dlinkedlist_element_t* e = dlinkedlist_first(c->s_queue);
 	dlinkedlist_remove(c->s_queue, e);
+	lwt_t sndr = e->data;
+	__lwt_wakeup(sndr);
 	dlinkedlist_element_free(&e);
-	// debug_print("%p: __lwt_rcv_blocked: lwt list count=%d\n", lwt_current(), lwt_chan_sending_count(c));
 
 	return data;
 }
@@ -969,9 +1037,26 @@ void* __lwt_rcv_buffered(lwt_chan_t c)
 {
 	// spinning if buffer is empty
 	while (ring_queue_empty(c->snd_buffer))
-		lwt_yield(NULL);
+	{
+		debug_print("%p: __lwt_rcv_buffered: blocking buffer empty\n", lwt_current());
+		__lwt_block();
+	}
 	
 	void* data = ring_queue_dequeue(c->snd_buffer);
+	debug_print("%p: __lwt_rcv_buffered: buffer having data %p\n", lwt_current(), data);
+
+	dlinkedlist_element_t* e = dlinkedlist_first(c->s_queue);
+	if (e)
+	{
+		dlinkedlist_remove(c->s_queue, e);
+		lwt_t sndr = e->data;
+		debug_print("%p: __lwt_rcv_buffered: wake up %p\n", lwt_current(), sndr);
+		__lwt_wakeup(sndr);
+		lwt_show_queue(1);
+		lwt_show_queue(2);
+		dlinkedlist_element_free(&e);
+	}
+
 	return data;
 }
 
@@ -1043,12 +1128,13 @@ int lwt_snd(lwt_chan_t c, void* data)
 		c->events_num++;
 		dlinkedlist_add(c->grp->event_queue, dlinkedlist_element_init(c));
 		c->event_queued = 1;
+		__lwt_wakeup(c->receiver);
 	}
 
 	if (__lwt_chan_use_buffer(c))
 	{
 		// Send data buffered
-		__lwt_snd_buffered(c, data);
+		__lwt_snd_buffered(sndr, c, data);
 	}
 	else
 	{
@@ -1161,7 +1247,8 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
 {
 	while (dlinkedlist_size(grp->event_queue) == 0)
 	{
-		lwt_yield(NULL);
+		debug_print("%p: blocked on grp\n", lwt_current());
+		__lwt_block();
 	}
 	
 	dlinkedlist_element_t* e = dlinkedlist_first(grp->event_queue);
@@ -1170,6 +1257,7 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
 	c->events_num--;
 	c->event_queued = 0;
 	dlinkedlist_element_free(&e);
+	debug_print("%p: event got on channel %p\n", lwt_current(), c);
 	return c;
 }
 
