@@ -34,6 +34,7 @@ typedef enum __lwt_status_t__
 	LWT_S_RUNNING,			// Thread is running
 	LWT_S_BLOCKED,			// Thread is blocked and in wait queue
 	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
+	LWT_S_ZOMBIE,			// Thread is finished and no one has joined it
 	LWT_S_DEAD				// Thread is joined and finally dead.
 }lwt_status_t;
 
@@ -97,6 +98,8 @@ int lwt_join(lwt_t lwt, void** retval_ptr);
  Gets the state of the lwt library
  */
 size_t lwt_info(lwt_info_type_t type);
+
+void lwt_show_queue();
 
 // ===================================================================
 // lwt channel
