@@ -712,7 +712,6 @@ void lwt_die(void* data)
 	lwt_finished->return_val = data;
 
 	// TODO: think about the logic of a dying thread
-	assert(0);
 
 	if (__lwt_flags_get_nojoin(lwt_finished))
 	{
