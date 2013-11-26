@@ -296,6 +296,12 @@ struct __lwt_queue_t__ __run_q = {NULL, 0};
 struct __lwt_queue_t__ __wait_q = {NULL, 0};
 
 /**
+ The zombie queue
+ threads that have died but not joined will be added to this queue
+ */
+struct __lwt_queue_t__ __zombie_q = {NULL, 0};
+
+/**
  The Dead Queue: recycled TCBs
  */
 struct __lwt_queue_t__ __dead_q = {NULL, 0};
@@ -705,9 +711,8 @@ void lwt_die(void* data)
 	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
 
-	lwt_finished->next = NULL;
-	lwt_finished->entry_fn = NULL;
-	lwt_finished->entry_fn_param = NULL;
+	// TODO: think about the logic of a dying thread
+	assert(0);
 
 	if (__lwt_flags_get_nojoin(lwt_finished))
 	{
@@ -716,13 +721,19 @@ void lwt_die(void* data)
 	}
 	else
 	{
+		lwt_queue_inqueue(&__zombie_q, lwt_finished);
 		__lwt_info.num_zombies++;
 	}
 	__lwt_info.num_runnable--;
 	
 
 	if (lwt_queue_size(&__run_q) == 0)
-		__lwt_wakeup_all();
+	{
+		if (lwt_finished->joiner)
+			__lwt_wakeup(lwt_finished->joiner);
+		else
+			__lwt_wakeup_all();
+	}
 
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
