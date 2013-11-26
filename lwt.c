@@ -367,7 +367,7 @@ void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name
 
 int __lwt_flags_get_joinable(lwt_flags_t f)
 {
-	return (f & LWT_F_NOJOIN);
+	return !(f & LWT_F_NOJOIN);
 }
 
 /**
@@ -656,23 +656,30 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 	if (lwt == lwt_current())
 		return -1;
 	
+	if (lwt->joiner)
+		return -1;
+	
 	if (lwt->status > LWT_S_FINISHED)
 		return -1;
 	
 	if (!__lwt_flags_get_joinable(lwt->flags))
 		return -1;
 	
-	// Spinning until the joining thread finishes.
+	lwt->joiner = lwt_current();
+
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
 
+	// Block until the joining thread finishes.
 	// Thread is joinable
 	while(lwt->status < LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
 		__lwt_block();
 	
 	lwt->status = LWT_S_DEAD;
 	if (retval_ptr)
+	{
 		*retval_ptr = lwt->return_val;
+	}
 	lwt_queue_inqueue(&__dead_q, lwt);
 	__lwt_info.num_zombies--;
 
@@ -695,7 +702,7 @@ void lwt_die(void* data)
 	lwt_finished->entry_fn = NULL;
 	lwt_finished->entry_fn_param = NULL;
 
-	if (lwt_finished->flags & LWT_F_NOJOIN)
+	if (!__lwt_flags_get_joinable(lwt_finished->flags))
 	{
 		lwt_finished->status = LWT_S_DEAD;
 		lwt_queue_inqueue(&__dead_q, lwt_finished);
