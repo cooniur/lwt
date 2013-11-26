@@ -720,25 +720,23 @@ void lwt_die(void* data)
 	}
 	else
 	{
-		lwt_queue_inqueue(&__zombie_q, lwt_finished);
 		__lwt_info.num_zombies++;
+		if (lwt_finished->joiner)
+		{
+			__lwt_wakeup(lwt_finished->joiner);
+		}
+		lwt_queue_inqueue(&__zombie_q, lwt_finished);
 	}
 	__lwt_info.num_runnable--;
-	
+
 
 	if (lwt_queue_size(&__run_q) == 0)
 	{
-		if (lwt_finished->joiner)
-			__lwt_wakeup(lwt_finished->joiner);
-		else
-			__lwt_wakeup_all();
+		__lwt_wakeup_all();
 	}
 
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
-
-	__lwt_wakeup_all();
-
 	__lwt_dispatch(next_lwt, lwt_finished);
 }
 
