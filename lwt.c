@@ -334,7 +334,8 @@ static size_t	__lwt_get_next_threadid();
 
 static inline void		__lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
 
-static inline int	__lwt_flags_get_joinable(lwt_flags_t f);
+static inline int		__lwt_flags_get_nojoin(lwt_t lwt);
+static inline void		__lwt_flags_set_nojoin(lwt_t lwt);
 
 extern void __lwt_trampoline();
 // =======================================================
@@ -365,9 +366,14 @@ void __lwt_debug_showqueue(struct __lwt_queue_t__* queue, const char* queue_name
 	__lwt_debug_showqueue(q, name)
 #endif
 
-int __lwt_flags_get_joinable(lwt_flags_t f)
+int __lwt_flags_get_nojoin(lwt_t lwt)
 {
-	return !(f & LWT_F_NOJOIN);
+	return lwt->flags & LWT_F_NOJOIN;
+}
+
+void __lwt_flags_set_nojoin(lwt_t lwt)
+{
+	lwt->flags = lwt->flags | LWT_F_NOJOIN;
 }
 
 /**
@@ -590,6 +596,7 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
 	new_lwt->return_val = NULL;
 	new_lwt->queue = NULL;
 	new_lwt->flags = flags;
+	new_lwt->joiner = NULL;
 	
 	__lwt_create_init_stack(new_lwt, fn, data);
 	
@@ -652,17 +659,17 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 {
 	if (!lwt)
 		return -1;
-	
+
 	if (lwt == lwt_current())
 		return -1;
-	
-	if (lwt->joiner)
-		return -1;
-	
+
 	if (lwt->status > LWT_S_FINISHED)
 		return -1;
-	
-	if (!__lwt_flags_get_joinable(lwt->flags))
+
+	if (__lwt_flags_get_nojoin(lwt))
+		return -1;
+
+	if (lwt->joiner)
 		return -1;
 	
 	lwt->joiner = lwt_current();
@@ -702,7 +709,7 @@ void lwt_die(void* data)
 	lwt_finished->entry_fn = NULL;
 	lwt_finished->entry_fn_param = NULL;
 
-	if (!__lwt_flags_get_joinable(lwt_finished->flags))
+	if (__lwt_flags_get_nojoin(lwt_finished))
 	{
 		lwt_finished->status = LWT_S_DEAD;
 		lwt_queue_inqueue(&__dead_q, lwt_finished);
@@ -982,6 +989,8 @@ lwt_chan_t lwt_chan(size_t sz, const char* name)
 	chan->snd_data = NULL;
 	chan->rcv_blocked = 0;
 	chan->receiver = lwt_current();
+	chan->grp = NULL;
+	chan->tag = NULL;
 	
 	__lwt_chan_set_name(chan, name);
 	__lwt_chan_init_snd_buffer(chan, sz);
