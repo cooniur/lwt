@@ -55,6 +55,7 @@ fn_null(void *d)
 { return NULL; }
 
 #define IS_RESET()						\
+		printf("r:%uz, z:%uz, b:%uz\n", lwt_info(LWT_INFO_NTHD_RUNNABLE), lwt_info(LWT_INFO_NTHD_ZOMBIES), lwt_info(LWT_INFO_NTHD_BLOCKED)); \
         assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
 		lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
 		lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
