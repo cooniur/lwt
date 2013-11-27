@@ -34,6 +34,7 @@ typedef enum __lwt_status_t__
 	LWT_S_RUNNING,			// Thread is running
 	LWT_S_BLOCKED,			// Thread is blocked and in wait queue
 	LWT_S_FINISHED,			// Thread is finished and is ready to be joined
+	LWT_S_ZOMBIE,			// Thread is finished and no one has joined it
 	LWT_S_DEAD				// Thread is joined and finally dead.
 }lwt_status_t;
 

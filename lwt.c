@@ -36,17 +36,6 @@
 #define __ATTR_ALWAYS_INLINE__ __attribute__((always_inline))
 
 /**
- Thread counter
- */
-struct __lwt_info_t__
-{
-	size_t num_runnable;
-	size_t num_zombies;
-	size_t num_blocked;
-};
-
-
-/**
  Thread Descriptor
  */
 struct __lwt_t__
@@ -318,11 +307,6 @@ lwt_t __main_thread = NULL;
  Stores the next available thread id #
  */
 int __lwt_threadid = 1;
-
-/**
- Stores thread info
- */
-struct __lwt_info_t__ __lwt_info = {1, 0, 0};
 
 // =======================================================
 /**
@@ -615,8 +599,6 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
 	
 	debug_showqueue(&__run_q, "run queue");
 	
-	__lwt_info.num_runnable++;
-	
 	return new_lwt;
 }
 
@@ -686,25 +668,24 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 	
 	lwt->joiner = cur_lwt;
 
-	__lwt_info.num_runnable--;
-	__lwt_info.num_blocked++;
-
 	// Block until the joining thread finishes.
 	// Thread is joinable
 	while(lwt->status < LWT_S_FINISHED)	// LWT_S_DEAD > LWT_S_FINISHED
 		__lwt_block();
 	
-	lwt->status = LWT_S_DEAD;
 	if (retval_ptr)
 	{
 		*retval_ptr = lwt->return_val;
 	}
-	lwt_queue_remove(&__zombie_q, lwt);
-	lwt_queue_inqueue(&__dead_q, lwt);
-	__lwt_info.num_zombies--;
 
-	__lwt_info.num_blocked--;
-	__lwt_info.num_runnable++;
+	if (lwt->status == LWT_S_ZOMBIE)
+	{
+		lwt_queue_remove(&__zombie_q, lwt);
+	}
+
+	lwt->status = LWT_S_DEAD;
+	lwt_queue_inqueue(&__dead_q, lwt);
+
 	return 0;
 }
 
@@ -728,7 +709,7 @@ void lwt_die(void* data)
 		else
 		{
 			lwt_queue_inqueue(&__zombie_q, lwt_finished);
-			__lwt_info.num_zombies++;
+			lwt_finished->status = LWT_S_ZOMBIE;
 		}
 	}
 	else
@@ -736,7 +717,6 @@ void lwt_die(void* data)
 		__lwt_wakeup(lwt_finished->joiner);
 	}
 	
-	__lwt_info.num_runnable--;
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	assert(next_lwt);
 	next_lwt->status = LWT_S_RUNNING;
@@ -773,13 +753,12 @@ size_t lwt_info(lwt_info_type_t type)
 {
 	switch (type) {
 		case LWT_INFO_NTHD_RUNNABLE:
-			return __lwt_info.num_runnable;
+			return lwt_queue_size(&__run_q);
 		case LWT_INFO_NTHD_BLOCKED:
-			return __lwt_info.num_blocked;
-		
+			return lwt_queue_size(&__wait_q);
 		case LWT_INFO_NTHD_ZOMBIES:
 		default:
-			return __lwt_info.num_zombies;
+			return lwt_queue_size(&__zombie_q);
 	}
 }
 
