@@ -97,7 +97,7 @@ struct __lwt_t__
 	 Thread ID
 	 Offset: 0x1c
 	 */
-	size_t id;
+	int id;
 	
 	/**
 	 Stack Size
@@ -329,6 +329,8 @@ struct __lwt_info_t__ __lwt_info = {1, 0, 0};
 void __lwt_start(lwt_fn_t fn, void* data);
 static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current);
 
+static inline lwt_t __lwt_current_inline();
+
 static void __lwt_block();
 static void __lwt_wakeup(lwt_t blocked_lwt);
 static void __lwt_wakeup_all();
@@ -336,7 +338,7 @@ static void __lwt_wakeup_all();
 static lwt_t	__lwt_init_lwt();
 static void		__lwt_init_tcb_pool();
 static void		__lwt_main_thread_init();
-static size_t	__lwt_get_next_threadid();
+static int		__lwt_get_next_threadid();
 
 static inline void		__lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
 
@@ -417,7 +419,7 @@ lwt_t __lwt_init_lwt()
 /**
  Gets the next available thread id #
  */
-static size_t __lwt_get_next_threadid()
+static int __lwt_get_next_threadid()
 {
 	return __lwt_threadid++;
 }
@@ -663,10 +665,11 @@ void lwt_yield(lwt_t target)
  */
 int lwt_join(lwt_t lwt, void** retval_ptr)
 {
+	lwt_t cur_lwt = __lwt_current_inline();
 	if (!lwt)
 		return -1;
 
-	if (lwt == lwt_current())
+	if (lwt == cur_lwt)
 		return -1;
 
 	if (lwt->status > LWT_S_FINISHED)
@@ -678,7 +681,7 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 	if (lwt->joiner)
 		return -1;
 	
-	lwt->joiner = lwt_current();
+	lwt->joiner = cur_lwt;
 
 	__lwt_info.num_runnable--;
 	__lwt_info.num_blocked++;
@@ -712,7 +715,6 @@ void lwt_die(void* data)
 	lwt_finished->return_val = data;
 
 	// TODO: think about the logic of a dying thread
-
 	if (__lwt_flags_get_nojoin(lwt_finished))
 	{
 		lwt_finished->status = LWT_S_DEAD;
@@ -730,10 +732,6 @@ void lwt_die(void* data)
 	__lwt_info.num_runnable--;
 
 
-	if (lwt_queue_size(&__run_q) == 0)
-	{
-		__lwt_wakeup_all();
-	}
 
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
@@ -745,8 +743,14 @@ void lwt_die(void* data)
  */
 lwt_t lwt_current()
 {
+	return __lwt_current_inline();
+}
+
+lwt_t __lwt_current_inline()
+{
 	return lwt_queue_peek(&__run_q);
 }
+
 
 /**
  Gets the thread id of a specified thread.
@@ -996,7 +1000,7 @@ lwt_chan_t lwt_chan(size_t sz, const char* name)
 	chan->s_queue = dlinkedlist_init();
 	chan->snd_data = NULL;
 	chan->rcv_blocked = 0;
-	chan->receiver = lwt_current();
+	chan->receiver = __lwt_current_inline();
 	chan->grp = NULL;
 	chan->tag = NULL;
 	
@@ -1011,7 +1015,7 @@ int lwt_chan_deref(lwt_chan_t* c)
 	if (!c || !(*c))
 		return -1;
 	
-	lwt_t cur_lwt = lwt_current();
+	lwt_t cur_lwt = __lwt_current_inline();
 	if ((*c)->receiver == cur_lwt)
 		(*c)->receiver = NULL;
 	else
@@ -1039,7 +1043,7 @@ int lwt_snd(lwt_chan_t c, void* data)
 		return -1;
 	
 	// Forbit receiver from sending to itself
-	lwt_t sndr = lwt_current();
+	lwt_t sndr = __lwt_current_inline();
 	if (c->receiver == sndr)
 		return -2;
 	
