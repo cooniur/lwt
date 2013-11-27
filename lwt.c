@@ -246,9 +246,12 @@ void lwt_queue_remove(struct __lwt_queue_t__* queue, struct __lwt_t__* lwt)
 	assert(queue);
 	assert(!lwt_queue_empty(queue));
 	assert(lwt);
-	assert(lwt->queue == queue);
+//	assert(lwt->queue == queue);
 	assert(lwt->prev);
 	assert(lwt->next);
+
+	if (lwt->queue != queue)
+		return;
 	
 	if (lwt == queue->head)
 	{
@@ -696,6 +699,7 @@ int lwt_join(lwt_t lwt, void** retval_ptr)
 	{
 		*retval_ptr = lwt->return_val;
 	}
+	lwt_queue_remove(&__zombie_q, lwt);
 	lwt_queue_inqueue(&__dead_q, lwt);
 	__lwt_info.num_zombies--;
 
@@ -714,26 +718,27 @@ void lwt_die(void* data)
 	lwt_finished->status = LWT_S_FINISHED;
 	lwt_finished->return_val = data;
 
-	// TODO: think about the logic of a dying thread
-	if (__lwt_flags_get_nojoin(lwt_finished))
+	if (!lwt_finished->joiner)
 	{
-		lwt_finished->status = LWT_S_DEAD;
-		lwt_queue_inqueue(&__dead_q, lwt_finished);
+		if (__lwt_flags_get_nojoin(lwt_finished))
+		{
+			lwt_finished->status = LWT_S_DEAD;
+			lwt_queue_inqueue(&__dead_q, lwt_finished);
+		}
+		else
+		{
+			lwt_queue_inqueue(&__zombie_q, lwt_finished);
+			__lwt_info.num_zombies++;
+		}
 	}
 	else
 	{
-		__lwt_info.num_zombies++;
-		if (lwt_finished->joiner)
-		{
-			__lwt_wakeup(lwt_finished->joiner);
-		}
-		lwt_queue_inqueue(&__zombie_q, lwt_finished);
+		__lwt_wakeup(lwt_finished->joiner);
 	}
+	
 	__lwt_info.num_runnable--;
-
-
-
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	assert(next_lwt);
 	next_lwt->status = LWT_S_RUNNING;
 	__lwt_dispatch(next_lwt, lwt_finished);
 }
