@@ -59,8 +59,6 @@ typedef struct __lwt_cgrp_t__* lwt_cgrp_t;
 
 typedef struct __lwt_chan_t__* lwt_chan_t;
 
-void lwt_init();
-
 /**
  lwt_fn_t: Type of a pointer to a thread entry function
  */

@@ -443,7 +443,8 @@ test_grpwait(int chsz, int grpsz)
 void* fn_kthd_test(void* data, lwt_chan_t c)
 {
 	printf("%p: running.\n", lwt_current());
-		
+	void* p = lwt_rcv(c);
+	printf("%p: data rcved: %p\n", lwt_current(), p);
 	return NULL;
 }
 
@@ -459,9 +460,17 @@ main(void)
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
 */
-	lwt_kthd_create(&fn_kthd_test, NULL, NULL);
-	
+	printf("%p: main\n", lwt_current());
+
+	lwt_chan_t c = lwt_chan(0, "r");
+	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
+	printf("%p: lwt_kthd_create: %d\n", lwt_current(), rc);
+
 	scanf("%d");
-	
+
+	rc = lwt_snd(c, (void*)0x123);
+	printf("%p: lwt_snd: %d\n", lwt_current(), rc);
+
+	scanf("%d");
 	return 0;
 }

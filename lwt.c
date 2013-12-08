@@ -241,6 +241,7 @@ struct __lwt_kthd_t__
 	void* message_queue;
 };
 
+LWT_KTHD_LOCAL struct __lwt_kthd_t__* __kthd = NULL;
 // =======================================================
 /**
  The Run Queue
@@ -530,7 +531,7 @@ static int __lwt_chan_try_to_free(lwt_chan_t* c);
 
 static inline void __lwt_chan_add_sndr(lwt_chan_t c, lwt_t sndr);
 
-void* __lwt_kthd_main(void* param);
+void* __lwt_kthd_entry(void* param);
 void __lwt_kthd_idle();
 
 extern void __lwt_trampoline();
@@ -626,7 +627,7 @@ static void __lwt_main_thread_init()
 	__main_thread->status = LWT_S_RUNNING;
 	__main_thread->stack = NULL;
 	__main_thread->next = NULL;
-	
+
 	lwt_queue_inqueue(&__run_q, __main_thread);
 }
 
@@ -748,11 +749,6 @@ void __lwt_wakeup_all()
 
 // =======================================================
 
-void lwt_init()
-{
-	__lwt_main_thread_init();
-}
-
 struct __lwt_kthd_entry_param_t__
 {
 	lwt_fn_t fn;
@@ -761,12 +757,20 @@ struct __lwt_kthd_entry_param_t__
 	lwt_kthd_t* kthd;
 };
 
-void* __lwt_kthd_main(void* param)
+void* __lwt_kthd_entry(void* param)
 {
+	__lwt_main_thread_init();
+
 	struct __lwt_kthd_entry_param_t__* p = param;
 	
+	debug_print("%p: creating lwt.....", lwt_current());
+
 	lwt_t lwt = lwt_create(p->fn, p->data, LWT_F_NOJOIN, p->c);
 	lwt->kthd = p->kthd;
+	
+	debug_print("%p: new lwt %p created.\n", lwt_current(), lwt);
+
+	free(param);
 	
 	__lwt_kthd_idle();
 
@@ -775,21 +779,27 @@ void* __lwt_kthd_main(void* param)
 
 void __lwt_kthd_idle()
 {
+	debug_print("%p: __lwt_kthd_idle in pthread %p. \n", lwt_current(), pthread_self());
+	int i = 0;
 	while(1)
 	{
 		// 1. read from message_queue
 		// 2. handle message
 		// 3. dispatch message
-
 		// 4. yield
+		if (i < 11)
+		{
+			debug_print("%p: idle yield\n", lwt_current());
+			i++;			
+		}
 		lwt_yield(LWT_NULL);
 	}
 }
 
 int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
 {
-	lwt_kthd_t* kthd = malloc(sizeof(struct __lwt_kthd_t__));
-	if (!kthd)
+	__kthd = malloc(sizeof(struct __lwt_kthd_t__));
+	if (!__kthd)
 		return -1;
 
 	struct __lwt_kthd_entry_param_t__* param = malloc(sizeof(struct __lwt_kthd_entry_param_t__));
@@ -806,13 +816,13 @@ int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
 	param->fn = fn;
 	param->data = data;
 	param->c = c;
-	param->kthd = kthd;
+	param->kthd = __kthd;
 	
-	if (0 != pthread_create(&kthd->kthd, &attr, &__lwt_kthd_main, param))
+	debug_print("%p: create pthread. Current pthread: %p\n", lwt_current(), pthread_self());
+	if (0 != pthread_create(&__kthd->kthd, &attr, &__lwt_kthd_entry, param))
 		return -1;
 	
 	pthread_attr_destroy(&attr);
-
 	return 0;
 }
 
@@ -823,8 +833,6 @@ int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
  */
 lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags, lwt_chan_t c)
 {
-	__lwt_main_thread_init();
-	
 	if (lwt_queue_size(&__dead_q) == 0)
 		__lwt_init_tcb_pool();
 		
@@ -836,7 +844,11 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags, lwt_chan_t c)
 	new_lwt->flags = flags;
 	new_lwt->joiner = NULL;
 	
-	c->receiver = new_lwt;
+	if (c)
+	{
+		c->receiver = new_lwt;
+		debug_print("%p: channel \"%s\" was delegated to %p\n", lwt_current(), lwt_chan_get_name(c), new_lwt);
+	}
 	
 	__lwt_create_init_stack(new_lwt, fn, data, c);
 	
@@ -1397,3 +1409,12 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 	return c;
 }
 
+
+/** __lwt_init is loaded automatically,
+ * to add main thread as an lwt thread.
+ */
+__attribute__((constructor))
+static void __lwt_init()
+{
+	__lwt_main_thread_init();
+}
