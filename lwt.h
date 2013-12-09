@@ -15,11 +15,6 @@
 #define LWT_NULL (NULL)
 
 /**
- lwt_fn_t: Type of a pointer to a thread entry function
- */
-typedef void*(*lwt_fn_t)(void*);
-
-/**
  lwt_t: Type of a pointer to a thread descriptor.
  */
 typedef struct __lwt_t__* lwt_t;
@@ -54,14 +49,31 @@ typedef enum __lwt_info_type_t__
 	LWT_INFO_NTHD_BLOCKED
 } lwt_info_type_t;
 
+typedef enum __lwt_chan_dir_t
+{
+	LWT_CHAN_SND,
+	LWT_CHAN_RCV
+} lwt_chan_dir_t;
+
+typedef struct __lwt_cgrp_t__* lwt_cgrp_t;
+
+typedef struct __lwt_chan_t__* lwt_chan_t;
+
 void lwt_init();
+
+/**
+ lwt_fn_t: Type of a pointer to a thread entry function
+ */
+typedef void*(*lwt_fn_t)(void*, lwt_chan_t);
+
+int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c);
 
 /**
  Creates a lwt thread, with the entry function pointer fn,
  and the parameter pointer data used by fn
  Returns lwt_t type
  */
-lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags);
+lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags, lwt_chan_t c);
 
 lwt_status_t lwt_status(lwt_t lwt);
 
@@ -104,9 +116,6 @@ void lwt_show_queue();
 // ===================================================================
 // lwt channel
 // ===================================================================
-typedef struct __lwt_cgrp_t__* lwt_cgrp_t;
-
-typedef struct __lwt_chan_t__* lwt_chan_t;
 
 lwt_chan_t lwt_chan(size_t sz, const char* name);
 
@@ -125,9 +134,11 @@ const char* lwt_chan_get_name(lwt_chan_t c);
  */
 int lwt_snd(lwt_chan_t c, void* data);
 int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc);
+int lwt_snd_cdeleg(lwt_chan_t c, lwt_chan_t delegating);
 
 void* lwt_rcv(lwt_chan_t c);
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c);
+lwt_chan_t lwt_rcv_cdeleg(lwt_chan_t c);
 
 size_t lwt_chan_sending_count(lwt_chan_t c);
 
@@ -136,8 +147,8 @@ void lwt_chan_mark_set(lwt_chan_t c, void* tag);
 
 lwt_cgrp_t lwt_cgrp();
 int lwt_cgrp_free(lwt_cgrp_t* grp);
-int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c);
+int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c, lwt_chan_dir_t dir);
 int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c);
-lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp);
+lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir);
 
 #endif

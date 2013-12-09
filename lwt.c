@@ -12,11 +12,14 @@
 #include <assert.h>
 #include <string.h>
 #include <execinfo.h>
+#include <pthread.h>
 
 #include "lwt.h"
 #include "ring_queue.h"
 #include "dlinkedlist.h"
 #include "debug_print.h"
+
+#define LWT_KTHD_LOCAL	__thread
 
 /**
  Gets the offset of a field inside a struc
@@ -35,6 +38,8 @@
 #define TCB_POOL_SIZE (64)
 
 #define __ATTR_ALWAYS_INLINE__ __attribute__((always_inline))
+
+typedef struct __lwt_kthd_t__ lwt_kthd_t;
 
 /**
  Thread Descriptor
@@ -122,6 +127,11 @@ struct __lwt_t__
 	 */
 	lwt_t joiner;
 	
+	/**
+	 On which pthread the lwt is running
+	 */
+	lwt_kthd_t* kthd;
+	
 } __attribute__ ((aligned (16), packed));
 
 /**
@@ -134,34 +144,131 @@ struct __lwt_queue_t__
 	char name[8];
 };
 
+struct __lwt_cgrp_t__
+{
+	/**
+	 Event queue in the group
+	 */
+	dlinkedlist_t* event_queue;
+	
+	/**
+	 Number of channels in this group
+	 */
+	size_t channel_num;
+};
+
+struct __lwt_chan_t__
+{
+	/**
+	 Channel's name
+	 */
+	char *name;
+	
+	/**
+	 Sender's data
+	 */
+	void *snd_data;
+	
+	/**
+	 Sender queue
+	 */
+	dlinkedlist_t* s_queue;
+	
+	/**
+	 Indicates whether a receiver is blocked on this channel
+	 */
+	int rcv_blocked;
+	
+	/**
+	 The receiver thread
+	 */
+	lwt_t receiver;
+	
+	/**
+	 Sender's data buffer
+	 */
+	ring_queue_t* snd_buffer;
+	
+	/**
+	 Sender's data buffer size;
+	 */
+	size_t snd_buffer_size;
+	
+	/**
+	 Sender list
+	 */
+	dlinkedlist_t* s_list;
+	
+	/**
+	 Tag for the channel
+	 */
+	void* tag;
+	
+	/**
+	 Belonging Channel group
+	 */
+	struct __lwt_cgrp_t__* grp;
+	
+	/**
+	 Indicates this channel is added to a group for waiting for sending event
+	 */
+	int event_snd;
+	
+	/**
+	 Indicates this channel is added to a group for waiting for receiving event
+	 */
+	int event_rcv;
+	
+	/**
+	 Number of events in this channel
+	 */
+	size_t events_num;
+	
+	/**
+	 Indicates whether this channel is queued in event queue.
+	 This flag makes sure that when doing a grouped buffered sending,
+	 the channel only be added into the group's event queue only once.
+	 */
+	int event_queued;
+};
+
+/**
+ kernal thread Struct
+ */
+struct __lwt_kthd_t__
+{
+	pthread_t kthd;
+	void* message_queue;
+};
+
 // =======================================================
 /**
  The Run Queue
  run_q.head always points to the current thread
  */
-struct __lwt_queue_t__ __run_q = {NULL, 0, "r"};
+LWT_KTHD_LOCAL struct __lwt_queue_t__ __run_q = {NULL, 0, "r"};
 
 /**
  The Wait Queue
  threads that are blocked will be added into this queue
  */
-struct __lwt_queue_t__ __wait_q = {NULL, 0, "w"};
+LWT_KTHD_LOCAL struct __lwt_queue_t__ __wait_q = {NULL, 0, "w"};
 
 /**
  The zombie queue
  threads that have died but not joined will be added to this queue
  */
-struct __lwt_queue_t__ __zombie_q = {NULL, 0, "z"};
+LWT_KTHD_LOCAL struct __lwt_queue_t__ __zombie_q = {NULL, 0, "z"};
 
 /**
  The Dead Queue: recycled TCBs
  */
-struct __lwt_queue_t__ __dead_q = {NULL, 0, "d"};
+LWT_KTHD_LOCAL struct __lwt_queue_t__ __dead_q = {NULL, 0, "d"};
 
 /**
  The main thread TCB
  */
-lwt_t __main_thread = NULL;
+LWT_KTHD_LOCAL lwt_t __main_thread = NULL;
 
 /**
  Stores the next available thread id #
@@ -197,7 +304,7 @@ void __lwt_stack_trace()
 		printf (">>>>>>>>>> %s\n", strings[i]);
 	
 	free (strings);
-	printf (">>>>>>>>> End of stacktrace.\n", size);
+	printf (">>>>>>>>> End of stacktrace.\n");
 }
 
 void __lwt_debug_showqueue(struct __lwt_queue_t__* queue)
@@ -388,7 +495,7 @@ struct __lwt_t__* lwt_queue_peek_tail(struct __lwt_queue_t__* queue)
  A new thread's entry point
  Calls __lwt_start (in assembly)
  */
-void __lwt_start(lwt_fn_t fn, void* data);
+void __lwt_start(lwt_fn_t fn, void* data, lwt_chan_t c);
 static __attribute__ ((noinline)) void __lwt_dispatch(lwt_t next, lwt_t current);
 
 static inline lwt_t __lwt_current_inline();
@@ -403,10 +510,28 @@ static void		__lwt_init_tcb_pool();
 static void		__lwt_main_thread_init();
 static int		__lwt_get_next_threadid();
 
-static inline void		__lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data);
+static inline void		__lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data, lwt_chan_t c);
 
 static inline int		__lwt_flags_get_nojoin(lwt_t lwt);
 static inline void		__lwt_flags_set_nojoin(lwt_t lwt);
+
+static void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data);
+static void* __lwt_rcv_blocked(lwt_chan_t c);
+
+static void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data);
+static void* __lwt_rcv_buffered(lwt_chan_t c);
+
+static int __lwt_chan_use_buffer(lwt_chan_t c);
+static void __lwt_chan_set_name(lwt_chan_t c, const char* name);
+
+static void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz);
+static void __lwt_chan_free_snd_buffer(lwt_chan_t c);
+static int __lwt_chan_try_to_free(lwt_chan_t* c);
+
+static inline void __lwt_chan_add_sndr(lwt_chan_t c, lwt_t sndr);
+
+void* __lwt_kthd_main(void* param);
+void __lwt_kthd_idle();
 
 extern void __lwt_trampoline();
 // =======================================================
@@ -448,6 +573,7 @@ lwt_t __lwt_init_lwt()
  */
 static int __lwt_get_next_threadid()
 {
+	// TODO: use lock-free to do synchronization
 	return __lwt_threadid++;
 }
 
@@ -508,9 +634,9 @@ static void __lwt_main_thread_init()
  Thread entry, called by __lwt_trampoline in assembly
  This function will return to lwt_die() implicitly.
  */
-void __lwt_start(lwt_fn_t fn, void* data)
+void __lwt_start(lwt_fn_t fn, void* data, lwt_chan_t c)
 {
-	void* ret = fn(data);
+	void* ret = fn(data, c);
 	
 	// prepare to return to lwt_die()
 	__asm__ __volatile__ (
@@ -525,7 +651,7 @@ void __lwt_start(lwt_fn_t fn, void* data)
 						  );
 }
 
-static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data)
+static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data, lwt_chan_t c)
 {
 	void* lwt_start_stack;
 
@@ -533,6 +659,8 @@ static inline void __lwt_create_init_stack(lwt_t lwt, lwt_fn_t fn, void* data)
 	lwt->esp = lwt->ebp;
 	unsigned int* esp = lwt->esp;
 	
+	*esp = c;
+	esp--;
 	*esp = data;
 	esp--;
 	*esp = fn;
@@ -625,12 +753,75 @@ void lwt_init()
 	__lwt_main_thread_init();
 }
 
+struct __lwt_kthd_entry_param_t__
+{
+	lwt_fn_t fn;
+	void* data;
+	lwt_chan_t c;
+	lwt_kthd_t* kthd;
+};
+
+void* __lwt_kthd_main(void* param)
+{
+	struct __lwt_kthd_entry_param_t__* p = param;
+	
+	lwt_t lwt = lwt_create(p->fn, p->data, LWT_F_NOJOIN, p->c);
+	lwt->kthd = p->kthd;
+	
+	__lwt_kthd_idle();
+
+	return NULL;
+}
+
+void __lwt_kthd_idle()
+{
+	while(1)
+	{
+		// 1. read from message_queue
+		// 2. handle message
+		// 3. dispatch message
+
+		// 4. yield
+		lwt_yield(LWT_NULL);
+	}
+}
+
+int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
+{
+	lwt_kthd_t* kthd = malloc(sizeof(struct __lwt_kthd_t__));
+	if (!kthd)
+		return -1;
+
+	struct __lwt_kthd_entry_param_t__* param = malloc(sizeof(struct __lwt_kthd_entry_param_t__));
+	if (!param)
+		return -1;
+	
+	pthread_attr_t attr;
+	if (0 != pthread_attr_init(&attr))
+		return -1;
+
+	if (0 != pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED))
+		return -1;
+
+	param->fn = fn;
+	param->data = data;
+	param->c = c;
+	param->kthd = kthd;
+	
+	if (0 != pthread_create(&kthd->kthd, &attr, &__lwt_kthd_main, param))
+		return -1;
+	
+	pthread_attr_destroy(&attr);
+
+	return 0;
+}
+
 /**
  Creates a lwt thread, with the entry function pointer fn,
  and the parameter pointer data used by fn
  Returns lwt_t type
  */
-lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
+lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags, lwt_chan_t c)
 {
 	__lwt_main_thread_init();
 	
@@ -645,7 +836,9 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags)
 	new_lwt->flags = flags;
 	new_lwt->joiner = NULL;
 	
-	__lwt_create_init_stack(new_lwt, fn, data);
+	c->receiver = new_lwt;
+	
+	__lwt_create_init_stack(new_lwt, fn, data, c);
 	
 	lwt_queue_inqueue(&__run_q, new_lwt);
 	
@@ -816,96 +1009,6 @@ size_t lwt_info(lwt_info_type_t type)
 // ===================================================================
 // lwt channel
 // ===================================================================
-struct __lwt_cgrp_t__
-{
-	/**
-	 Event queue in the group
-	 */
-	dlinkedlist_t* event_queue;
-	
-	/**
-	 Number of channels in this group
-	 */
-	size_t channel_num;
-};
-
-struct __lwt_chan_t__
-{
-	/**
-	 Channel's name
-	 */
-	char *name;
-	
-	/**
-	 Sender's data
-	 */
-	void *snd_data;
-	
-	/**
-	 Sender queue
-	 */
-	dlinkedlist_t* s_queue;
-	
-	/**
-	 Indicates whether a receiver is blocked on this channel
-	 */
-	int rcv_blocked;
-	
-	/**
-	 The receiver thread
-	 */
-	lwt_t receiver;
-	
-	/**
-	 Sender's data buffer
-	 */
-	ring_queue_t* snd_buffer;
-	
-	/**
-	 Sender's data buffer size;
-	 */
-	size_t snd_buffer_size;
-		
-	/**
-	 Sender list
-	 */
-	dlinkedlist_t* s_list;
-	
-	/**
-	 Tag for the channel
-	 */
-	void* tag;
-	
-	/**
-	 Belonging Channel group
-	 */
-	struct __lwt_cgrp_t__* grp;
-	
-	/**
-	 Number of events in this channel
-	 */
-	size_t events_num;
-
-	/**
-	 Indicates whether this channel is queued in event queue.
-	 This flag makes sure that when doing a grouped buffered sending,
-	 the channel only be added into the group's event queue only once.
-	 */
-	int event_queued;
-};
-
-void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data);
-void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data);
-
-void* __lwt_rcv_blocked(lwt_chan_t c);
-void* __lwt_rcv_buffered(lwt_chan_t c);
-
-int __lwt_chan_use_buffer(lwt_chan_t c);
-void __lwt_chan_set_name(lwt_chan_t c, const char* name);
-
-void __lwt_chan_init_snd_buffer(lwt_chan_t c, size_t sz);
-void __lwt_chan_free_snd_buffer(lwt_chan_t c);
-int __lwt_chan_try_to_free(lwt_chan_t* c);
 
 int __lwt_chan_use_buffer(lwt_chan_t c)
 {
@@ -1060,6 +1163,13 @@ void* __lwt_rcv_buffered(lwt_chan_t c)
 	return data;
 }
 
+void __lwt_chan_add_sndr(lwt_chan_t c, lwt_t sndr)
+{
+	if (!dlinkedlist_find(c->s_list, sndr))
+		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
+}
+
+
 // =======================================================
 
 lwt_chan_t lwt_chan(size_t sz, const char* name)
@@ -1072,7 +1182,11 @@ lwt_chan_t lwt_chan(size_t sz, const char* name)
 	chan->receiver = __lwt_current_inline();
 	chan->grp = NULL;
 	chan->tag = NULL;
-	
+	chan->event_rcv = 0;
+	chan->event_snd = 0;
+	chan->events_num = 0;
+	chan->event_queued = 0;
+
 	__lwt_chan_set_name(chan, name);
 	__lwt_chan_init_snd_buffer(chan, sz);
 	
@@ -1117,8 +1231,7 @@ int lwt_snd(lwt_chan_t c, void* data)
 		return -2;
 	
 	// If sndr has not sent on this channel before, add it to sender list
-	if (!dlinkedlist_find(c->s_list, sndr))
-		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
+	__lwt_chan_add_sndr(c, sndr);
 
 	// debug_print("%p: lwt_snd: %s's lwt_list count=%d", lwt_current(), lwt_chan_get_name(c), dlinkedlist_size(c->s_list));
 	// debug_print(", sending count=%d\n", lwt_chan_sending_count(c));
@@ -1166,9 +1279,27 @@ int lwt_snd_chan(lwt_chan_t c, lwt_chan_t sc)
 	return lwt_snd(c, sc);
 }
 
+int lwt_snd_cdeleg(lwt_chan_t c, lwt_chan_t delegating)
+{
+	// add sender to the sender list of delegating channel
+	__lwt_chan_add_sndr(delegating, __lwt_current_inline());
+
+	return lwt_snd(c, delegating);
+}
+
 lwt_chan_t lwt_rcv_chan(lwt_chan_t c)
 {
 	return lwt_rcv(c);
+}
+
+lwt_chan_t lwt_rcv_cdeleg(lwt_chan_t c)
+{
+	lwt_chan_t delegating = lwt_rcv(c);
+
+	// change the receiver of the received channel to current thread
+	delegating->receiver = __lwt_current_inline();
+	
+	return delegating;
 }
 
 void* lwt_chan_mark_get(lwt_chan_t c)
@@ -1217,11 +1348,16 @@ int lwt_cgrp_free(lwt_cgrp_t* grp)
 	return 0;
 }
 
-int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c)
+int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c, lwt_chan_dir_t dir)
 {
 	if (c->grp)
 		return -1;
 
+	if (dir == LWT_CHAN_SND)
+		c->event_snd = 0;
+	else if (dir == LWT_CHAN_RCV)
+		c->event_rcv = 0;
+	
 	c->grp = grp;
 	c->events_num = 0;
 	grp->channel_num++;
@@ -1243,7 +1379,7 @@ int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 	return 0;
 }
 
-lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp)
+lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 {
 	while (dlinkedlist_size(grp->event_queue) == 0)
 	{
