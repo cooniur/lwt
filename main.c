@@ -13,6 +13,7 @@
 #include <math.h>
 
 #include "lwt.h"
+#include "kthd_pool.h"
 #include "debug_print.h"
 
 #define rdtscll(val) __asm__ __volatile__("rdtsc" : "=A" (val))
@@ -473,6 +474,57 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 	return NULL;
 }
 
+void test_kthd()
+{
+	printf("%p: main\n", lwt_current());
+	
+	lwt_chan_t c = lwt_chan(0, "r");
+	lwt_chan_t from = lwt_chan(0, "r");
+	lwt_cgrp_t g = lwt_cgrp();
+	lwt_cgrp_add(g, from, LWT_CHAN_SND);
+	
+	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
+	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
+	
+	assert(lwt_snd(c, from) == 0);
+	
+	// for (int i=0; i<ITER; i++)
+	// {
+	// 	assert(lwt_snd(c, (void*)0x123) == 0);
+	// }
+	lwt_chan_deref(&c);
+	
+	lwt_chan_t rcvable;
+	lwt_chan_dir_t dir;
+	for (int i=0; i<ITER; i++)
+	{
+		//rcvable = lwt_cgrp_wait(g, &dir);
+		assert(lwt_rcv(from) == (void*)0x234);
+	}
+	lwt_chan_deref(&from);
+	printf("end\n");
+	getchar();
+	
+	assert(lwt_chan_sending_count(c) == 0);
+	assert(lwt_chan_sending_count(from) == 0);
+}
+
+void* fn_kp_worker(void* reserved, lwt_chan_t from)
+{
+	printf("worker running...\n");
+	
+	return NULL;
+}
+
+void test_kp()
+{
+	kp_t pool = kp_create();
+	lwt_chan_t to = lwt_chan(0, "to");
+	kp_work(pool, fn_kp_worker, to);
+	kp_destroy(pool);
+	getchar();
+}
+
 int
 main(void)
 {
@@ -486,37 +538,8 @@ main(void)
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
 */
-	printf("%p: main\n", lwt_current());
-
-	lwt_chan_t c = lwt_chan(0, "r");
-	lwt_chan_t from = lwt_chan(0, "r");
-	lwt_cgrp_t g = lwt_cgrp();
-	lwt_cgrp_add(g, from, LWT_CHAN_SND);
-
-	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
-	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
-
-	assert(lwt_snd(c, from) == 0);
-
-	// for (int i=0; i<ITER; i++)
-	// {
-	// 	assert(lwt_snd(c, (void*)0x123) == 0);
-	// }
-	lwt_chan_deref(&c);
-
-	lwt_chan_t rcvable;
-	lwt_chan_dir_t dir;
-	for (int i=0; i<ITER; i++)
-	{
-		//rcvable = lwt_cgrp_wait(g, &dir);
-		assert(lwt_rcv(from) == (void*)0x234);
-	}
-	lwt_chan_deref(&from);
-	printf("end\n");
-	getchar();
-
-	assert(lwt_chan_sending_count(c) == 0);
-	assert(lwt_chan_sending_count(from) == 0);
-
+//	test_kthd();
+	
+	
 	return 0;
 }
