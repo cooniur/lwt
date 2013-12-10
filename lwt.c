@@ -177,6 +177,12 @@ struct __lwt_cgrp_t__
 	 Total number of events that happened on this group
 	 */
 	size_t total_num_events;
+	
+	/**
+	 locks
+	 */
+	pthread_mutex_t lock_event_queue[2];
+	pthread_mutex_t lock_wait_queue[2];
 };
 
 struct __lwt_chan_t__
@@ -1504,7 +1510,9 @@ void __lwt_chan_trigger_sndevt(lwt_chan_t c)
 	assert(c);
 	
 	// add snd event to the snd event queue (id=0)
+	pthread_mutex_lock(&c->grp[0]->lock_event_queue[0]);
 	dlinkedlist_add(c->grp[0]->event_queue[0], dlinkedlist_element_init(c));
+	pthread_mutex_unlock(&c->grp[0]->lock_event_queue[0]);
 	c->event_queued[0] = 1;
 	c->events_num[0]++;
 	c->grp[0]->total_num_events++;
@@ -1514,6 +1522,7 @@ void __lwt_chan_trigger_sndevt(lwt_chan_t c)
 	
 	dlinkedlist_element_t* e;
 	dlinkedlist_t* wq = c->grp[0]->wait_queue[0];
+	pthread_mutex_lock(&c->grp[0]->lock_wait_queue[0]);
 	while(dlinkedlist_size(wq) > 0)
 	{
 		e = dlinkedlist_first(wq);
@@ -1521,6 +1530,7 @@ void __lwt_chan_trigger_sndevt(lwt_chan_t c)
 		__lwt_wakeup(e->data);
 		debug_print("%p: waking up lwt %p\n", lwt_current(), e->data);
 	}
+	pthread_mutex_unlock(&c->grp[0]->lock_wait_queue[0]);
 }
 
 // =======================================================
@@ -1714,6 +1724,12 @@ lwt_cgrp_t lwt_cgrp()
 
 	grp->listeners[0] = dlinkedlist_init();
 	grp->listeners[1] = dlinkedlist_init();
+	
+	pthread_mutex_init(&grp->lock_event_queue[0], NULL);
+	pthread_mutex_init(&grp->lock_event_queue[1], NULL);
+
+	pthread_mutex_init(&grp->lock_wait_queue[0], NULL);
+	pthread_mutex_init(&grp->lock_wait_queue[1], NULL);
 
 	grp->channel_num = 0;
 	grp->total_num_events = 0;
@@ -1734,6 +1750,12 @@ int lwt_cgrp_free(lwt_cgrp_t* grp)
 		dlinkedlist_free(&((*grp)->listeners[0]));
 		dlinkedlist_free(&((*grp)->listeners[1]));
 	
+		pthread_mutex_destroy(&(*grp)->lock_event_queue[0]);
+		pthread_mutex_destroy(&(*grp)->lock_event_queue[1]);
+		
+		pthread_mutex_destroy(&(*grp)->lock_wait_queue[0]);
+		pthread_mutex_destroy(&(*grp)->lock_wait_queue[1]);
+		
 		free(*grp);
 		*grp = NULL;
 	}
@@ -1813,6 +1835,8 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 	lwt_chan_dir_t evt_dir;
 	
 	lwt_t lwt = __lwt_current_inline();
+	pthread_mutex_t* lock_evt_q;
+	pthread_mutex_t* lock_wq;
 	// 1. check whether lwt is a listener for snd event
 	dlinkedlist_element_t* e = dlinkedlist_find(grp->listeners[0], lwt);
 	if (e)
@@ -1822,6 +1846,8 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 		evt_dir = LWT_CHAN_RCV;
 		event_queue = grp->event_queue[0];
 		wq = grp->wait_queue[0];
+		lock_evt_q = &grp->lock_event_queue[0];
+		lock_wq = &grp->lock_wait_queue[0];
 	}
 	else
 	{
@@ -1832,6 +1858,8 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 			evt_dir = LWT_CHAN_SND;
 			event_queue = grp->event_queue[1];
 			wq = grp->wait_queue[1];
+			lock_evt_q = &grp->lock_event_queue[1];
+			lock_wq = &grp->lock_wait_queue[1];
 		}
 	}
 	
@@ -1840,12 +1868,16 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 	
 	while (dlinkedlist_size(event_queue) == 0)
 	{
+		pthread_mutex_lock(lock_wq);
 		dlinkedlist_add(wq, dlinkedlist_element_init(lwt));
+		pthread_mutex_unlock(lock_wq);
 		__lwt_block();
 	}
-	
+
+	pthread_mutex_lock(lock_evt_q);
 	dlinkedlist_element_t* evt = dlinkedlist_first(event_queue);
 	dlinkedlist_remove(event_queue, evt);
+	pthread_mutex_unlock(lock_evt_q);
 	lwt_chan_t c = evt->data;
 	dlinkedlist_element_free(&evt);
 
