@@ -36,8 +36,8 @@ dlinkedlist_element_t*	dlinkedlist_find(dlinkedlist_t* list, void* data);
 int						dlinkedlist_remove(dlinkedlist_t* list, dlinkedlist_element_t* e);
 
 #define					dlinkedlist_foreach_element(e, list) \
-							size_t size = dlinkedlist_size(list); \
+							size_t __dl_size = dlinkedlist_size(list); \
 							dlinkedlist_element_t *(e) = dlinkedlist_first(list);	\
-							for (size_t i = 0; i < size; (e) = (e)->next, i++)
+							for (size_t __dl_i = 0; __dl_i < __dl_size; (e) = (e)->next, __dl_i++)
 
 #endif	// #ifndef lwt_dlinkedlist_h
