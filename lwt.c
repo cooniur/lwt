@@ -257,6 +257,7 @@ struct __lwt_kthd_t__
 {
 	pthread_t pthread_id;
 	void* message_queue;
+	pthread_mutex_t msg_queue_lock;
 };
 
 struct __lwt_kthd_entry_param_t__
@@ -266,6 +267,15 @@ struct __lwt_kthd_entry_param_t__
 	void* data;
 	lwt_chan_t c;
 	lwt_kthd_t* kthd;
+};
+
+struct __lwt_kthd_msg_t__
+{
+	enum __lwt_kthd_msg_op_t {
+		LWT_MSG_WAKEUP,
+		LWT_MSG_YIELD
+	} op;
+	lwt_t lwt;
 };
 
 LWT_KTHD_LOCAL struct __lwt_kthd_t__* __current_kthd = NULL;
@@ -538,8 +548,6 @@ static void __lwt_block_and_wakeup(lwt_t lwt);
 static void __lwt_wakeup(lwt_t blocked_lwt);
 static void __lwt_wakeup_all();
 
-static void __lwt_kthd_wakeup(struct __lwt_kthd_t__* kthd, lwt_t blocked_lwt);
-
 static lwt_t	__lwt_init_lwt();
 static void		__lwt_init_tcb_pool();
 static void		__lwt_main_thread_init();
@@ -568,6 +576,13 @@ static inline void __lwt_chan_add_sndr(lwt_chan_t c, lwt_t sndr);
 
 void* __lwt_kthd_entry(void* param);
 void __lwt_kthd_idle();
+static struct __lwt_kthd_t__* __lwt_kthd_init();
+
+static void __lwt_kthd_wakeup(lwt_t blocked_lwt);
+static void __lwt_kthd_yield(lwt_t target);
+
+static void							__lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t__* msg);
+static struct __lwt_kthd_msg_t__*	__lwt_kthd_msg_dequeue();
 
 extern void __lwt_trampoline();
 // =======================================================
@@ -785,8 +800,7 @@ void __lwt_block_and_wakeup(lwt_t lwt)
 		next_lwt = lwt_queue_peek(&__run_q);
 		next_lwt->status = LWT_S_RUNNING;
 
-		__lwt_kthd_wakeup(lwt->kthd, lwt);
-		
+		__lwt_kthd_wakeup(lwt);
 	}
 
 	__lwt_dispatch(next_lwt, current_lwt);
@@ -806,7 +820,7 @@ void __lwt_wakeup(lwt_t blocked_lwt)
 		// blocked_lwt is on another kernal thread
 		else
 		{
-			__lwt_kthd_wakeup(blocked_lwt->kthd, blocked_lwt);
+			__lwt_kthd_wakeup(blocked_lwt);
 		}
 	}
 }
@@ -821,12 +835,44 @@ void __lwt_wakeup_all()
 	}
 }
 
-void __lwt_kthd_wakeup(struct __lwt_kthd_t__* kthd, lwt_t blocked_lwt)
+void __lwt_kthd_wakeup(lwt_t blocked_lwt)
 {
-	// TODO:
+	struct __lwt_kthd_msg_t__* msg = malloc(sizeof(struct __lwt_kthd_msg_t__));
+	msg->op = LWT_MSG_WAKEUP;
+	msg->lwt = blocked_lwt;
+	__lwt_kthd_msg_inqueue(blocked_lwt->kthd, msg);
+}
+
+void __lwt_kthd_yield(lwt_t target)
+{
+	struct __lwt_kthd_msg_t__* msg = malloc(sizeof(struct __lwt_kthd_msg_t__));
+	msg->op = LWT_MSG_YIELD;
+	msg->lwt = target;
+	__lwt_kthd_msg_inqueue(target->kthd, msg);
 }
 
 // =======================================================
+
+void __lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t__* msg)
+{
+	pthread_mutex_lock(&kthd->msg_queue_lock);
+	dlinkedlist_add(kthd->message_queue, dlinkedlist_element_init(msg));
+	pthread_mutex_unlock(&kthd->msg_queue_lock);
+}
+
+struct __lwt_kthd_msg_t__* __lwt_kthd_msg_dequeue()
+{
+	struct __lwt_kthd_msg_t__* msg = NULL;
+	
+	pthread_mutex_lock(&__current_kthd->msg_queue_lock);
+	dlinkedlist_element_t* e = dlinkedlist_first(__current_kthd->message_queue);
+	dlinkedlist_remove(__current_kthd->message_queue, e);
+	pthread_mutex_unlock(&__current_kthd->msg_queue_lock);
+
+	msg = e->data;
+	dlinkedlist_element_free(&e);
+	return msg;
+}
 
 void* __lwt_kthd_entry(void* param)
 {
@@ -854,8 +900,32 @@ void __lwt_kthd_idle()
 //	debug_print("%p: __lwt_kthd_idle in pthread %p. \n", lwt_current(), pthread_self());
 	while(1)
 	{
-		lwt_yield(LWT_NULL);
+		struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_dequeue();
+		if (msg)
+		{
+			switch (msg->op)
+			{
+				case LWT_MSG_YIELD:
+					lwt_yield(msg->lwt);
+					break;
+
+				case LWT_MSG_WAKEUP:
+					__lwt_wakeup(msg->lwt);
+					lwt_yield(LWT_NULL);
+					break;
+			}
+		}
+		else
+			lwt_yield(LWT_NULL);
 	}
+}
+
+struct __lwt_kthd_t__* __lwt_kthd_init()
+{
+	struct __lwt_kthd_t__* ret = malloc(sizeof(struct __lwt_kthd_t__));
+	ret->message_queue = dlinkedlist_init();
+	pthread_mutex_init(&ret->msg_queue_lock, NULL);
+	return ret;
 }
 
 int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
@@ -864,7 +934,7 @@ int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
 	if (!param)
 		return -1;
 
-	param->kthd = malloc(sizeof(struct __lwt_kthd_t__));
+	param->kthd = __lwt_kthd_init();
 	if (!param->kthd)
 		return -1;
 
@@ -941,24 +1011,29 @@ void lwt_yield(lwt_t target)
 {
 	lwt_t current_lwt = lwt_queue_head_next(&__run_q);
 	current_lwt->status = LWT_S_READY;
-
+	
 	if (target)
 	{
-		if (target->status == LWT_S_BLOCKED)
+		if (target->kthd != __current_kthd)
+			__lwt_kthd_yield(target);
+		else
 		{
-			lwt_queue_remove(&__wait_q, target);
-			lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
-		}
-		else if (target->status == LWT_S_READY)
-		{
-			lwt_queue_remove(&__run_q, target);
-			lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
+			if (target->status == LWT_S_BLOCKED)
+			{
+				lwt_queue_remove(&__wait_q, target);
+				lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
+			}
+			else if (target->status == LWT_S_READY)
+			{
+				lwt_queue_remove(&__run_q, target);
+				lwt_queue_insert_before(&__run_q, lwt_queue_peek(&__run_q), target);
+			}
 		}
 	}
 	
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
 	next_lwt->status = LWT_S_RUNNING;
-
+	
 	__lwt_dispatch(next_lwt, current_lwt);
 }
 
