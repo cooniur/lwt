@@ -489,7 +489,7 @@ main(void)
 	printf("%p: main\n", lwt_current());
 
 	lwt_chan_t c = lwt_chan(0, "r");
-	lwt_chan_t from = lwt_chan(3, "r");
+	lwt_chan_t from = lwt_chan(0, "r");
 	lwt_cgrp_t g = lwt_cgrp();
 	lwt_cgrp_add(g, from, LWT_CHAN_SND);
 
@@ -508,8 +508,8 @@ main(void)
 	lwt_chan_dir_t dir;
 	for (int i=0; i<ITER; i++)
 	{
-		rcvable = lwt_cgrp_wait(g, &dir);
-		assert(lwt_rcv(rcvable) == (void*)0x234);
+		//rcvable = lwt_cgrp_wait(g, &dir);
+		assert(lwt_rcv(from) == (void*)0x234);
 	}
 	lwt_chan_deref(&from);
 	printf("end\n");
