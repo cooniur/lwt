@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
+#include <math.h>
 
 #include "lwt.h"
 #include "debug_print.h"
@@ -456,9 +458,9 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 	printf("%p: lwt running. ready to rcv...\n", lwt_current());
 	for (int i=0; i<ITER; i++)
 	{
-		void* p = lwt_rcv(c);
-		assert(p == (void*)0x123);
+		assert((void*)0x123 == lwt_rcv(c));
 	}
+	lwt_chan_deref(&c);
 	printf("lwt end\n");
 	return NULL;
 }
@@ -466,7 +468,7 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 int
 main(void)
 {
-/*	test_perf();
+	test_perf();
 	test_crt_join_sched();
 	test_perf_channels(0);
 	test_multisend(0);
@@ -474,19 +476,18 @@ main(void)
 	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
-*/
+
 	printf("%p: main\n", lwt_current());
 
-	lwt_chan_t c = lwt_chan(0, "r");
+	lwt_chan_t c = lwt_chan(10, "r");
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
 	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
 
 	for (int i=0; i<ITER; i++)
 	{
-		rc = lwt_snd(c, (void*)0x123);
-		assert(rc == 0);
+		assert(lwt_snd(c, (void*)0x123) == 0);
 	}
-
+	lwt_chan_deref(&c);
 	printf("end\n");
 	getchar();
 

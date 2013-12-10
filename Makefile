@@ -1,4 +1,4 @@
-DEBUG_FLAG	= -D_NDEBUG -D_DEBUG_PRINT -D_Q_DEBUG
+DEBUG_FLAG	= -D_NDEBUG -D_DEBUG_PRINT -D_Q_DEBUG -D_USE_MATH_DEFINES
 
 COBJS		= main.o lwt.o dlinkedlist.o ring_queue.o
 CFLAGS		= -O3 -I. -Wall -Wextra -std=gnu99 -lpthread

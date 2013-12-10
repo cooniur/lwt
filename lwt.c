@@ -781,6 +781,12 @@ void __lwt_block()
 	lwt_queue_inqueue(&__wait_q, current_lwt);
 	
 	lwt_t next_lwt = lwt_queue_peek(&__run_q);
+	if (!next_lwt)
+	{
+		next_lwt = __idle_thread;
+		lwt_queue_remove(&__wait_q, next_lwt);
+		lwt_queue_inqueue(&__run_q, next_lwt);
+	}
 	next_lwt->status = LWT_S_RUNNING;
 
 	__lwt_dispatch(next_lwt, current_lwt);
@@ -974,7 +980,7 @@ void __lwt_kthd_idle()
 					break;
 					
 				case LWT_MSG_SND_BUFFERED:
-					debug_print("%p: msg: LWT_MSG_SND_BLOCKED\n", lwt_current());
+					debug_print("%p: msg: LWT_MSG_SND_BUFFERED\n", lwt_current());
 					__lwt_snd_buffered(msg->lwt, msg->c, msg->c_data);
 					break;
 			}
@@ -1403,12 +1409,12 @@ void __lwt_snd_buffered_do(lwt_t sndr, lwt_chan_t c, void* data)
 	
 	debug_print("%p: __lwt_snd_buffered: buffer inqueue data %p\n", lwt_current(), data);
 	ring_queue_inqueue(c->snd_buffer, data);
-	__lwt_wakeup(c->receiver);
 	if (sndr->kthd != c->receiver->kthd)
 	{
+		debug_print("%p: __lwt_snd_buffered: yield to sndr %p\n", lwt_current(), sndr);
 		__lwt_kthd_yield(sndr);
 	}
-	
+	__lwt_wakeup(c->receiver);
 }
 
 void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data)
