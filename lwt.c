@@ -275,6 +275,7 @@ enum __lwt_kthd_msg_op_t {
 	LWT_MSG_BLOCK,
 	LWT_MSG_SND_BLOCKED,
 	LWT_MSG_SND_BUFFERED,
+	LWT_MSG_TRIG_SND_EVENT,
 };
 
 struct __lwt_kthd_msg_t__
@@ -594,6 +595,8 @@ static void __lwt_kthd_yield(lwt_t target);
 static struct __lwt_kthd_msg_t__*	__lwt_kthd_msg_init(enum __lwt_kthd_msg_op_t op, lwt_t lwt, lwt_chan_t c, void* c_data);
 static void							__lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t__* msg);
 static struct __lwt_kthd_msg_t__*	__lwt_kthd_msg_dequeue();
+
+static void __lwt_chan_trigger_sndevt(lwt_chan_t c);
 
 extern void __lwt_trampoline();
 // =======================================================
@@ -982,6 +985,12 @@ void __lwt_kthd_idle()
 				case LWT_MSG_SND_BUFFERED:
 					debug_print("%p: msg: LWT_MSG_SND_BUFFERED\n", lwt_current());
 					__lwt_snd_buffered(msg->lwt, msg->c, msg->c_data);
+					break;
+					
+				case LWT_MSG_TRIG_SND_EVENT:
+					debug_print("%p: msg: LWT_MSG_TRIG_SND_EVENT\n", lwt_current());
+					__lwt_chan_trigger_sndevt(msg->c);
+					__lwt_wakeup(msg->lwt);
 					break;
 			}
 		}
@@ -1490,6 +1499,29 @@ void __lwt_chan_add_sndr(lwt_chan_t c, lwt_t sndr)
 		dlinkedlist_add(c->s_list, dlinkedlist_element_init(sndr));
 }
 
+void __lwt_chan_trigger_sndevt(lwt_chan_t c)
+{
+	assert(c);
+	
+	// add snd event to the snd event queue (id=0)
+	dlinkedlist_add(c->grp[0]->event_queue[0], dlinkedlist_element_init(c));
+	c->event_queued[0] = 1;
+	c->events_num[0]++;
+	c->grp[0]->total_num_events++;
+	
+	// wakeup all rcvrs that are waiting for snd event on this group
+	debug_print("%p: wake up snd-event waiting lwts.\n", lwt_current());
+	
+	dlinkedlist_element_t* e;
+	dlinkedlist_t* wq = c->grp[0]->wait_queue[0];
+	while(dlinkedlist_size(wq) > 0)
+	{
+		e = dlinkedlist_first(wq);
+		dlinkedlist_remove(wq, e);
+		__lwt_wakeup(e->data);
+		debug_print("%p: waking up lwt %p\n", lwt_current(), e->data);
+	}
+}
 
 // =======================================================
 
@@ -1557,23 +1589,17 @@ int lwt_snd(lwt_chan_t c, void* data)
 	// if the channel is added to a group that waits for snd event to happen
 	if (c->grp[0] && !c->event_queued[0])
 	{
-		// add snd event to the snd event queue (id=0)
-		dlinkedlist_add(c->grp[0]->event_queue[0], dlinkedlist_element_init(c));
-		c->event_queued[0] = 1;
-		c->events_num[0]++;
-		c->grp[0]->total_num_events++;
-
-		// wakeup all rcvrs that are waiting for snd event on this group
-		debug_print("%p: wake up snd-event waiting lwts.\n", lwt_current());
-
-		dlinkedlist_element_t* e;
-		dlinkedlist_t* wq = c->grp[0]->wait_queue[0];
-		while(dlinkedlist_size(wq) > 0)
+		// snder is on another kthd
+		if (sndr->kthd != c->receiver->kthd)
 		{
-			e = dlinkedlist_first(wq);
-			dlinkedlist_remove(wq, e);
-			__lwt_wakeup(e->data);
-			debug_print("%p: waking up lwt %p\n", lwt_current(), e->data);
+			void* msg = __lwt_kthd_msg_init(LWT_MSG_TRIG_SND_EVENT, sndr, c, NULL);
+			__lwt_kthd_msg_inqueue(c->receiver->kthd, msg);
+			__lwt_block();
+		}
+		// sndr is on the same kthd
+		else
+		{
+			__lwt_chan_trigger_sndevt(c);
 		}
 	}
 
