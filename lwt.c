@@ -132,7 +132,7 @@ struct __lwt_t__
 	 On which pthread the lwt is running
 	 */
 	lwt_kthd_t* kthd;
-	
+
 } __attribute__ ((aligned (16), packed));
 
 /**
@@ -269,13 +269,21 @@ struct __lwt_kthd_entry_param_t__
 	lwt_kthd_t* kthd;
 };
 
+enum __lwt_kthd_msg_op_t {
+	LWT_MSG_WAKEUP,
+	LWT_MSG_YIELD,
+	LWT_MSG_SND_BLOCKED,
+	LWT_MSG_RCV_BLOCKED,
+	LWT_MSG_SND_BUFFERED,
+	LWT_MSG_RCV_BUFFERED,
+};
+
 struct __lwt_kthd_msg_t__
 {
-	enum __lwt_kthd_msg_op_t {
-		LWT_MSG_WAKEUP,
-		LWT_MSG_YIELD
-	} op;
+	enum __lwt_kthd_msg_op_t op;
 	lwt_t lwt;
+	lwt_chan_t c;
+	void* c_data;
 };
 
 LWT_KTHD_LOCAL struct __lwt_kthd_t__* __current_kthd = NULL;
@@ -581,6 +589,7 @@ static struct __lwt_kthd_t__* __lwt_kthd_init();
 static void __lwt_kthd_wakeup(lwt_t blocked_lwt);
 static void __lwt_kthd_yield(lwt_t target);
 
+static struct __lwt_kthd_msg_t__*	__lwt_kthd_msg_init(enum __lwt_kthd_msg_op_t op, lwt_t lwt, lwt_chan_t c, void* c_data);
 static void							__lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t__* msg);
 static struct __lwt_kthd_msg_t__*	__lwt_kthd_msg_dequeue();
 
@@ -837,21 +846,28 @@ void __lwt_wakeup_all()
 
 void __lwt_kthd_wakeup(lwt_t blocked_lwt)
 {
-	struct __lwt_kthd_msg_t__* msg = malloc(sizeof(struct __lwt_kthd_msg_t__));
-	msg->op = LWT_MSG_WAKEUP;
-	msg->lwt = blocked_lwt;
+	struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_init(LWT_MSG_WAKEUP, blocked_lwt, NULL, NULL);
 	__lwt_kthd_msg_inqueue(blocked_lwt->kthd, msg);
 }
 
 void __lwt_kthd_yield(lwt_t target)
 {
-	struct __lwt_kthd_msg_t__* msg = malloc(sizeof(struct __lwt_kthd_msg_t__));
-	msg->op = LWT_MSG_YIELD;
-	msg->lwt = target;
+	struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_init(LWT_MSG_YIELD, target, NULL, NULL);
 	__lwt_kthd_msg_inqueue(target->kthd, msg);
 }
 
 // =======================================================
+
+struct __lwt_kthd_msg_t__* __lwt_kthd_msg_init(enum __lwt_kthd_msg_op_t op, lwt_t lwt, lwt_chan_t c, void* c_data)
+{
+	struct __lwt_kthd_msg_t__* msg = malloc(sizeof(struct __lwt_kthd_msg_t__));
+	msg->op = op;
+	msg->lwt = lwt;
+	msg->c = c;
+	msg->c_data = c_data;
+
+	return msg;
+}
 
 void __lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t__* msg)
 {
@@ -903,8 +919,13 @@ void __lwt_kthd_idle()
 //	debug_print("%p: __lwt_kthd_idle in pthread %p. \n", lwt_current(), pthread_self());
 	while(1)
 	{
+		if (lwt_queue_size(&__wait_q) == 0 && lwt_queue_size(&__run_q) == 1)
+			break;
+		
 		struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_dequeue();
-		if (msg)
+		if (!msg)
+			lwt_yield(LWT_NULL);
+		else
 		{
 			switch (msg->op)
 			{
@@ -914,13 +935,16 @@ void __lwt_kthd_idle()
 
 				case LWT_MSG_WAKEUP:
 					__lwt_wakeup(msg->lwt);
-					lwt_yield(LWT_NULL);
+					break;
+					
+				case LWT_MSG_SND_BLOCKED:
+					__lwt_snd_blocked(msg->lwt, msg->c, msg->c_data);
 					break;
 			}
 		}
-		else
-			lwt_yield(LWT_NULL);
 	}
+	
+	debug_print("pthread ended.\n");
 }
 
 struct __lwt_kthd_t__* __lwt_kthd_init()
@@ -1225,16 +1249,31 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 {
 	debug_print("%p: lwt_snd: -> __lwt_snd_blocked.\n", lwt_current());
 	
+	lwt_t cur = __lwt_current_inline();
+	// executing on the same kthd as the sndr does
+	if (cur == sndr)
+	{
+		// receiver is on another kthd, need msg passing
+		if (sndr->kthd != c->receiver->kthd)
+		{
+			struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_init(LWT_MSG_SND_BLOCKED, sndr, c, data);
+			__lwt_kthd_msg_inqueue(c->receiver->kthd, msg);
+			__lwt_block();
+		}
+	}
+	
+	/* receiver is on the same kthd, or msg has been passed to the receiver's kthd */
+
 	// Add sndr to sender queue
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
-
+	
 	// wait until my turn
 	while (dlinkedlist_first(c->s_queue)->data != sndr)
 	{
 		debug_print("%p: __lwt_snd_blocked: wait until my turn.\n", lwt_current());
 		__lwt_block();
 	}
-
+	
 	// now it is my turn, set the data
 	c->snd_data = data;
 	
@@ -1270,7 +1309,18 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	dlinkedlist_element_t* e = dlinkedlist_first(c->s_queue);
 	dlinkedlist_remove(c->s_queue, e);
 	lwt_t sndr = e->data;
-	__lwt_wakeup(sndr);
+	// sndr is on another kthd
+	if (sndr->kthd != c->receiver->kthd)
+	{
+		__lwt_wakeup(__idle_thread);
+		__lwt_kthd_wakeup(sndr);
+	}
+	// sndr is on the same kthd
+	else
+	{
+		__lwt_wakeup(sndr);
+	}
+					
 	dlinkedlist_element_free(&e);
 
 	return data;
