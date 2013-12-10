@@ -120,7 +120,6 @@ dlinkedlist_element_t* dlinkedlist_find(dlinkedlist_t* list, void* data)
 	if (dlinkedlist_size(list) == 0)
 		return NULL;
 	
-	int c = 0;
 	dlinkedlist_element_t* ret = NULL;
 	dlinkedlist_foreach_element(e, list)
 	{
