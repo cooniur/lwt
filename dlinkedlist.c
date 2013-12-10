@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #include "dlinkedlist.h"
 
@@ -107,6 +108,7 @@ int dlinkedlist_add(dlinkedlist_t* list, dlinkedlist_element_t* e)
 	}
 	
 	list->size++;
+
 	return 0;
 }
 
@@ -118,6 +120,7 @@ dlinkedlist_element_t* dlinkedlist_find(dlinkedlist_t* list, void* data)
 	if (dlinkedlist_size(list) == 0)
 		return NULL;
 	
+	int c = 0;
 	dlinkedlist_element_t* ret = NULL;
 	dlinkedlist_foreach_element(e, list)
 	{

@@ -16,6 +16,7 @@
 #define rdtscll(val) __asm__ __volatile__("rdtsc" : "=A" (val))
 
 #define ITER 10000
+#define USE_KTHD (1)
 
 /* 
  * My output on an Intel Core i5-2520M CPU @ 2.50GHz:
@@ -75,7 +76,7 @@ fn_null(void *d, lwt_chan_t c)
 
 #define IS_RESET()						\
 		//printf("r:%u, z:%u, b:%u\n", lwt_info(LWT_INFO_NTHD_RUNNABLE), lwt_info(LWT_INFO_NTHD_ZOMBIES), lwt_info(LWT_INFO_NTHD_BLOCKED)); \
-        assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 &&	\
+        assert( lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 + USE_KTHD &&	\
 		lwt_info(LWT_INFO_NTHD_ZOMBIES) == 0 &&		\
 		lwt_info(LWT_INFO_NTHD_BLOCKED) == 0)
 
@@ -85,7 +86,6 @@ test_perf(void)
 	lwt_t chld1, chld2;
 	int i;
 	unsigned long long start, end;
-
 
 	/* Performance tests */
 	rdtscll(start);
@@ -116,7 +116,7 @@ fn_nested_joins(void *d, lwt_chan_t c)
 	if (d) {
 		lwt_yield(LWT_NULL);
 		lwt_yield(LWT_NULL);
-		assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1);
+		assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 1 + USE_KTHD);
 		lwt_die(NULL);
 	}
 	chld = lwt_create(fn_nested_joins, (void*)1, 0, NULL);
@@ -232,6 +232,8 @@ fn_chan(void *data, lwt_chan_t c)
 void
 test_perf_channels(int chsz)
 {
+	printf("[PERF] test_perf_channels: snd+rcv (buffer size %d)\n", chsz);
+
 	lwt_chan_t from, to;
 	lwt_t t;
 	int i;
@@ -358,7 +360,7 @@ test_perf_async_steam(int chsz)
 	assert(from);
 //	lwt_chan_grant(from);
 	t = lwt_create(fn_async_steam, from, 0, NULL);
-	assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 2);
+	assert(lwt_info(LWT_INFO_NTHD_RUNNABLE) == 2 + USE_KTHD);
 	rdtscll(start);
 	for (i = 0 ; i < ITER ; i++) 
 		assert(i+1 == (int)lwt_rcv(from));
@@ -404,11 +406,14 @@ test_grpwait(int chsz, int grpsz)
 	for (i = 0 ; i < grpsz ; i++) {
 		sprintf(name, "cs[%d]", i);
 		cs[i] = lwt_chan(chsz, name);
+		// printf("channel %p: %s\n", cs[i], lwt_chan_get_name(cs[i]));
 		assert(cs[i]);
 //		lwt_chan_grant(cs[i]);
 		ts[i] = lwt_create(fn_grpwait, cs[i], 0, NULL);
 		lwt_chan_mark_set(cs[i], (void*)lwt_id(ts[i]));
-		lwt_cgrp_add(g, cs[i], LWT_CHAN_RCV);
+		int rc = lwt_cgrp_add(g, cs[i], LWT_CHAN_SND);
+		if (rc != 0)
+			printf("test_grpwait: grp[%d] error %d\n", i, rc);
 	}
 	assert(lwt_cgrp_free(&g) == -1);
 	/**
@@ -425,16 +430,22 @@ test_grpwait(int chsz, int grpsz)
 
 		lwt_chan_dir_t dir;
 		c = lwt_cgrp_wait(g, &dir);
-		assert(c);
-		r = (int)lwt_rcv(c);
-		assert(r == (int)lwt_chan_mark_get(c));
+		if (dir == LWT_CHAN_RCV)
+		{
+			assert(c);
+			r = (int)lwt_rcv(c);
+			assert(r == (int)lwt_chan_mark_get(c));
+		}
 	}
+
 	for (i = 0 ; i < grpsz ; i++) {
 		lwt_cgrp_rem(g, cs[i]);
 		lwt_join(ts[i], NULL);
 		lwt_chan_deref(&cs[i]);
 	}
-	assert(!lwt_cgrp_free(g));
+
+	// printf("main: free grp\n");
+	assert(!lwt_cgrp_free(&g));
 	printf("[TEST] group wait (channel buffer size %d, grpsz %d) passed.\n",
 	       chsz, grpsz);
 	return;
@@ -451,7 +462,7 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 int
 main(void)
 {
-/*	test_perf();
+	test_perf();
 	test_crt_join_sched();
 	test_perf_channels(0);
 	test_multisend(0);
@@ -459,8 +470,8 @@ main(void)
 	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
-*/
-	printf("%p: main\n", lwt_current());
+
+/*	printf("%p: main\n", lwt_current());
 
 	lwt_chan_t c = lwt_chan(0, "r");
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
@@ -472,5 +483,6 @@ main(void)
 	printf("%p: lwt_snd: %d\n", lwt_current(), rc);
 
 	scanf("%d");
+*/
 	return 0;
 }

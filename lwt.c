@@ -149,22 +149,22 @@ struct __lwt_cgrp_t__
 {
 	/**
 	 Channels that have a specific event occurred in the group
-		0: snd event
-		1: rcv event
+		0: snd event queue
+		1: rcv event queue
 	 */
 	dlinkedlist_t* event_queue[2];
 
 	/**
 	 lwts that are waiting for events to occur
-		0: snd event wait queue
-		1: rcv event wait queue
+		0: lwts waiting for snd event to happen
+		1: lwts waiting for rcv event to happen
 	 */
 	dlinkedlist_t* wait_queue[2];
 	
 	/**
 	 Stores lwts that listen to event on the specific direction
-		0: snd direction
-		1: rcv direction
+		0: lwts listening to snd event to happen
+		1: lwts listening to rcv event to happen
 	 */
 	dlinkedlist_t* listeners[2];
 	
@@ -228,15 +228,15 @@ struct __lwt_chan_t__
 	
 	/**
 	 Belonging Channel group
-	 0: snd group
-	 1: rcv group
+	 0: group that waits for snd event
+	 1: group that waits for rcv event
 	 */
 	struct __lwt_cgrp_t__* grp[2];
 		
 	/**
 	 Number of events in this channel
-	 0: snd events number
-	 1: rcv events number
+	 0: number of snd events happened on the channel
+	 1: number of rcv events happened on the channel
 	 */
 	size_t events_num[2];
 	
@@ -244,8 +244,8 @@ struct __lwt_chan_t__
 	 Indicates whether this channel is queued in event queue.
 	 This flag makes sure that when doing a grouped buffered sending,
 	 the channel only be added into the group's event queue only once.
-	 0: snd queued
-	 1: rcv queued
+	 0: snd event queued
+	 1: rcv event queued
 	 */
 	int event_queued[2];
 };
@@ -661,6 +661,7 @@ void __lwt_main_thread_init()
 	__main_thread->id = 0;
 	__main_thread->status = LWT_S_RUNNING;
 	__main_thread->stack = NULL;
+	__main_thread->kthd = __current_kthd;
 
 	lwt_queue_inqueue(&__run_q, __main_thread);
 }
@@ -694,6 +695,7 @@ void __lwt_create_init_existing(lwt_t lwt, lwt_flags_t flags, lwt_fn_t fn, void*
 	lwt->entry_fn_param = data;
 	lwt->flags = flags;
 	lwt->joiner = NULL;
+	lwt->kthd = __current_kthd;
 	
 	__lwt_create_init_stack(lwt, fn, data, c);
 	
@@ -849,7 +851,7 @@ void* __lwt_kthd_entry(void* param)
 
 void __lwt_kthd_idle()
 {
-	debug_print("%p: __lwt_kthd_idle in pthread %p. \n", lwt_current(), pthread_self());
+//	debug_print("%p: __lwt_kthd_idle in pthread %p. \n", lwt_current(), pthread_self());
 	while(1)
 	{
 		lwt_yield(LWT_NULL);
@@ -909,6 +911,7 @@ lwt_t lwt_create(lwt_fn_t fn, void* data, lwt_flags_t flags, lwt_chan_t c)
 	new_lwt->entry_fn_param = data;
 	new_lwt->flags = flags;
 	new_lwt->joiner = NULL;
+	new_lwt->kthd = __current_kthd;
 	
 	__lwt_create_init_stack(new_lwt, fn, data, c);
 	
@@ -1142,6 +1145,8 @@ int __lwt_chan_try_to_free(lwt_chan_t *c)
 
 void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 {
+	debug_print("%p: lwt_snd: -> __lwt_snd_blocked.\n", lwt_current());
+	
 	// Add sndr to sender queue
 	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
 
@@ -1215,6 +1220,7 @@ void __lwt_snd_buffered(lwt_t sndr, lwt_chan_t c, void* data)
 	
 	debug_print("%p: __lwt_snd_buffered: buffer inqueue data %p\n", lwt_current(), data);
 	ring_queue_inqueue(c->snd_buffer, data);
+	__lwt_wakeup(c->receiver);
 }
 
 void* __lwt_rcv_buffered(lwt_chan_t c)
@@ -1312,33 +1318,35 @@ int lwt_snd(lwt_chan_t c, void* data)
 	// debug_print("%p: lwt_snd: %s's lwt_list count=%d", lwt_current(), lwt_chan_get_name(c), dlinkedlist_size(c->s_list));
 	// debug_print(", sending count=%d\n", lwt_chan_sending_count(c));
 	
-	if (c->grp[1] && !c->event_queued[1])
+	// if the channel is added to a group that waits for snd event to happen
+	if (c->grp[0] && !c->event_queued[0])
 	{
-		dlinkedlist_add(c->grp[1]->event_queue[0], dlinkedlist_element_init(c));
-		c->event_queued[1] = 1;
-		c->events_num[1]++;
-		c->grp[1]->total_num_events++;
+		// add snd event to the snd event queue (id=0)
+		dlinkedlist_add(c->grp[0]->event_queue[0], dlinkedlist_element_init(c));
+		c->event_queued[0] = 1;
+		c->events_num[0]++;
+		c->grp[0]->total_num_events++;
 
-		// TODO: wakeup all receivers that are waiting for rcv event on this group
+		// wakeup all rcvrs that are waiting for snd event on this group
+		debug_print("%p: wake up snd-event waiting lwts.\n", lwt_current());
+
 		dlinkedlist_element_t* e;
-		dlinkedlist_t* wq = c->grp[1]->wait_queue[1];
+		dlinkedlist_t* wq = c->grp[0]->wait_queue[0];
 		while(dlinkedlist_size(wq) > 0)
 		{
 			e = dlinkedlist_first(wq);
 			dlinkedlist_remove(wq, e);
 			__lwt_wakeup(e->data);
+			debug_print("%p: waking up lwt %p\n", lwt_current(), e->data);
 		}
 	}
 
 	if (__lwt_chan_use_buffer(c))
 	{
-		// Send data buffered
 		__lwt_snd_buffered(sndr, c, data);
 	}
 	else
 	{
-		// Send data blocked
-		debug_print("%p: lwt_snd: -> __lwt_snd_blocked.\n", lwt_current());
 		__lwt_snd_blocked(sndr, c, data);
 	}
 	return 0;
@@ -1348,16 +1356,18 @@ void* lwt_rcv(lwt_chan_t c)
 {
 	void* ret = NULL;
 	
-	if (c->grp[0] && !c->event_queued[0])
+	// if the channel is added to a group that waits for rcv event to happen
+	if (c->grp[1] && !c->event_queued[1])
 	{
-		dlinkedlist_add(c->grp[0]->event_queue[1], dlinkedlist_element_init(c));
-		c->event_queued[0] = 1;
-		c->events_num[0]++;
-		c->grp[0]->total_num_events++;
+		// add rcv event to the rcv event queue (id=1)
+		dlinkedlist_add(c->grp[1]->event_queue[1], dlinkedlist_element_init(c));
+		c->event_queued[1] = 1;
+		c->events_num[1]++;
+		c->grp[1]->total_num_events++;
 
-		// wakeup all sndrs that are waiting for snd event on this grp
+		// wakeup all sndrs that are waiting for rcv event on this grp
 		dlinkedlist_element_t* e;
-		dlinkedlist_t* wq = c->grp[0]->wait_queue[0];
+		dlinkedlist_t* wq = c->grp[1]->wait_queue[1];
 		while(dlinkedlist_size(wq) > 0)
 		{
 			e = dlinkedlist_first(wq);
@@ -1436,10 +1446,13 @@ lwt_cgrp_t lwt_cgrp()
 	lwt_cgrp_t grp = malloc(sizeof(struct __lwt_cgrp_t__));
 	grp->event_queue[0] = dlinkedlist_init();
 	grp->event_queue[1] = dlinkedlist_init();
+
 	grp->wait_queue[0] = dlinkedlist_init();
 	grp->wait_queue[1] = dlinkedlist_init();
+
 	grp->listeners[0] = dlinkedlist_init();
 	grp->listeners[1] = dlinkedlist_init();
+
 	grp->channel_num = 0;
 	grp->total_num_events = 0;
 	return grp;
@@ -1467,26 +1480,30 @@ int lwt_cgrp_free(lwt_cgrp_t* grp)
 
 int lwt_cgrp_add(lwt_cgrp_t grp, lwt_chan_t c, lwt_chan_dir_t dir)
 {
-	if (dir == LWT_CHAN_SND)
+	// add to wait for rcv event to happen
+	if (dir == LWT_CHAN_RCV)
 	{
-		if (c->grp[0])
-			return -2;
-		
-		c->grp[0] = grp;
-		c->events_num[0] = 0;
-		dlinkedlist_add(grp->listeners[0], dlinkedlist_element_init(__lwt_current_inline()));
-	}
-	else if (dir == LWT_CHAN_RCV)
-	{
-		if (c->receiver != __lwt_current_inline())
-			return -1;
-
 		if (c->grp[1])
 			return -2;
 		
 		c->grp[1] = grp;
 		c->events_num[1] = 0;
-		dlinkedlist_add(grp->listeners[1], dlinkedlist_element_init(__lwt_current_inline()));
+		if (!dlinkedlist_find(grp->listeners[1], __lwt_current_inline()))
+			dlinkedlist_add(grp->listeners[1], dlinkedlist_element_init(__lwt_current_inline()));
+	}
+	// add to wait for snd event to happen
+	else if (dir == LWT_CHAN_SND)
+	{
+		if (c->receiver != __lwt_current_inline())
+			return -1;
+
+		if (c->grp[0])
+			return -2;
+		
+		c->grp[0] = grp;
+		c->events_num[0] = 0;
+		if (!dlinkedlist_find(grp->listeners[0], __lwt_current_inline()))
+			dlinkedlist_add(grp->listeners[0], dlinkedlist_element_init(__lwt_current_inline()));
 	}
 	
 	grp->channel_num++;
@@ -1507,7 +1524,7 @@ int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 		if (e)
 		{
 			dlinkedlist_remove(grp->listeners[0], e);
-			free(&e);
+			dlinkedlist_element_free(&e);
 		}
 	}
 	else if (c->grp[1] == grp)
@@ -1519,7 +1536,7 @@ int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 		if (e)
 		{
 			dlinkedlist_remove(grp->listeners[1], e);
-			free(&e);
+			dlinkedlist_element_free(&e);
 		}
 	}
 	
@@ -1530,6 +1547,7 @@ int lwt_cgrp_rem(lwt_cgrp_t grp, lwt_chan_t c)
 lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 {
 	dlinkedlist_t* event_queue = NULL;
+	dlinkedlist_t* wq = NULL;
 	lwt_chan_dir_t evt_dir;
 	
 	lwt_t lwt = __lwt_current_inline();
@@ -1537,45 +1555,52 @@ lwt_chan_t lwt_cgrp_wait(lwt_cgrp_t grp, lwt_chan_dir_t* dir)
 	dlinkedlist_element_t* e = dlinkedlist_find(grp->listeners[0], lwt);
 	if (e)
 	{
-		evt_dir = LWT_CHAN_SND;
+		debug_print("%p: is waiting for snd event\n", lwt);
+		// set channel to receivable
+		evt_dir = LWT_CHAN_RCV;
 		event_queue = grp->event_queue[0];
+		wq = grp->wait_queue[0];
 	}
 	else
 	{
 		e = dlinkedlist_find(grp->listeners[1], lwt);
 		if (e)
 		{
-			evt_dir = LWT_CHAN_RCV;
+			debug_print("%p: is waiting for rcv event\n", lwt);
+			evt_dir = LWT_CHAN_SND;
 			event_queue = grp->event_queue[1];
+			wq = grp->wait_queue[1];
 		}
 	}
 	
-	if (!event_queue)
+	if (!event_queue || !wq)
 		return NULL;
 	
 	while (dlinkedlist_size(event_queue) == 0)
 	{
-		debug_print("%p: blocked on grp\n", lwt_current());
+		dlinkedlist_add(wq, dlinkedlist_element_init(lwt));
 		__lwt_block();
 	}
 	
 	dlinkedlist_element_t* evt = dlinkedlist_first(event_queue);
 	dlinkedlist_remove(event_queue, evt);
-	lwt_chan_t c = e->data;
-	dlinkedlist_element_free(&e);
+	lwt_chan_t c = evt->data;
+	dlinkedlist_element_free(&evt);
 
+	// the channel is sendable
 	if (evt_dir == LWT_CHAN_SND)
-	{
-		c->events_num[0]--;
-		c->event_queued[0]--;
-	}
-	else if (evt_dir == LWT_CHAN_RCV)
 	{
 		c->events_num[1]--;
 		c->event_queued[1]--;
 	}
+	// the channel is receivable
+	else if (evt_dir == LWT_CHAN_RCV)
+	{
+		c->events_num[0]--;
+		c->event_queued[0]--;
+	}
 
-	debug_print("%p: event got on channel %p\n", lwt_current(), c);
+	*dir = evt_dir;
 	return c;
 }
 
@@ -1593,11 +1618,13 @@ void* __lwt_idle_thread_for_main(void* data, lwt_chan_t c)
 __attribute__((constructor))
 static void __lwt_init()
 {
-	__lwt_main_thread_init();
-
 	__current_kthd = malloc(sizeof(struct __lwt_kthd_t__));
 	__current_kthd->pthread_id = pthread_self();
 	__current_kthd->message_queue = dlinkedlist_init();
 
+	__lwt_main_thread_init();
+
 	__idle_thread = lwt_create(&__lwt_idle_thread_for_main, NULL, LWT_F_NOJOIN, NULL);
+
+	debug_print("main: %p, idle: %p\n", __main_thread, __idle_thread);
 }
