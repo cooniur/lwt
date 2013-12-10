@@ -464,7 +464,7 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 	// }
 	lwt_chan_deref(&c);
 
-	for (int i=0; i<10; i++)
+	for (int i=0; i<ITER; i++)
 	{
 		assert(lwt_snd(to, (void*)0x234) == 0);
 	}
@@ -506,7 +506,7 @@ main(void)
 
 	lwt_chan_t rcvable;
 	lwt_chan_dir_t dir;
-	for (int i=0; i<10; i++)
+	for (int i=0; i<ITER; i++)
 	{
 		rcvable = lwt_cgrp_wait(g, &dir);
 		assert(lwt_rcv(rcvable) == (void*)0x234);
