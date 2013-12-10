@@ -901,10 +901,10 @@ void* __lwt_kthd_entry(void* param)
 
 	__current_kthd = p->kthd;
 	__idle_thread = __lwt_current_inline();
+	__idle_thread->kthd = __current_kthd;
 	
-	debug_print("%p: creating lwt.....", lwt_current());
+	debug_print("%p: creating lwt.....\n", lwt_current());
 	__lwt_create_init_existing(p->lwt, LWT_F_NOJOIN, p->fn, p->data, p->c);
-	p->lwt->kthd = p->kthd;
 	debug_print("%p: new lwt %p created.\n", lwt_current(), p->lwt);
 
 	free(param);
@@ -927,17 +927,21 @@ void __lwt_kthd_idle()
 			lwt_yield(LWT_NULL);
 		else
 		{
+			debug_print("%p: msg: %d\n", lwt_current(), msg->op);
 			switch (msg->op)
 			{
 				case LWT_MSG_YIELD:
+					debug_print("%p: msg: LWT_MSG_YIELD\n", lwt_current());
 					lwt_yield(msg->lwt);
 					break;
 
 				case LWT_MSG_WAKEUP:
+					debug_print("%p: msg: LWT_MSG_WAKEUP\n", lwt_current());
 					__lwt_wakeup(msg->lwt);
 					break;
 					
 				case LWT_MSG_SND_BLOCKED:
+					debug_print("%p: msg: LWT_MSG_SND_BLOCKED\n", lwt_current());
 					__lwt_snd_blocked(msg->lwt, msg->c, msg->c_data);
 					break;
 			}
@@ -976,6 +980,7 @@ int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
 	param->fn = fn;
 	param->data = data;
 	param->c = c;
+	param->lwt->kthd = param->kthd;
 	
 	if (c)
 	{
@@ -988,6 +993,7 @@ int lwt_kthd_create(lwt_fn_t fn, void* data, lwt_chan_t c)
 		return -1;
 	
 	pthread_attr_destroy(&attr);
+
 	return 0;
 }
 
@@ -1256,45 +1262,76 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 		// receiver is on another kthd, need msg passing
 		if (sndr->kthd != c->receiver->kthd)
 		{
+			debug_print("%p: not on the same kthd as the receiver\n", sndr);
 			struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_init(LWT_MSG_SND_BLOCKED, sndr, c, data);
 			__lwt_kthd_msg_inqueue(c->receiver->kthd, msg);
+			debug_print("%p: msg sent, wait.\n", sndr);
 			__lwt_block();
 		}
+		// receiver is on the same kthd
+		else
+		{
+			// Add sndr to sender queue
+			dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+			
+			// wait until my turn
+			while (dlinkedlist_first(c->s_queue)->data != sndr)
+			{
+				debug_print("%p: __lwt_snd_blocked: wait until my turn.\n", lwt_current());
+				__lwt_block();
+			}
+			
+			// now it is my turn, set the data
+			c->snd_data = data;
+			
+			// wait if it is my turn but no receiver exists or is blocked on this channel
+			while (!c->rcv_blocked && c->snd_data)
+			{
+				debug_print("%p: __lwt_snd_blocked: wait no rcv.\n", lwt_current());
+				__lwt_block();
+			}
+			
+			// Now the receiver is ready to receive, yield to it
+			debug_print("%p: __lwt_snd_blocked: yield to rcver %p.\n", lwt_current(), c->receiver);
+			lwt_yield(c->receiver);
+		}
 	}
-	
-	/* receiver is on the same kthd, or msg has been passed to the receiver's kthd */
-
-	// Add sndr to sender queue
-	dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
-	
-	// wait until my turn
-	while (dlinkedlist_first(c->s_queue)->data != sndr)
+	// executing on a kthd other than sndr's
+	// meaning msg has been passed to the receiver's kthd
+	else
 	{
-		debug_print("%p: __lwt_snd_blocked: wait until my turn.\n", lwt_current());
-		__lwt_block();
+		// Add sndr to sender queue
+		dlinkedlist_add(c->s_queue, dlinkedlist_element_init(sndr));
+		
+		// wait until my turn
+		while (dlinkedlist_first(c->s_queue)->data != sndr)
+		{
+			debug_print("%p: __lwt_snd_blocked: wait until my turn.\n", lwt_current());
+			__lwt_block();
+		}
+		
+		// now it is my turn, set the data
+		c->snd_data = data;
+		
+		// wait if it is my turn but no receiver exists or is blocked on this channel
+		while (!c->rcv_blocked && c->snd_data)
+		{
+			debug_print("%p: __lwt_snd_blocked: wait no rcv.\n", lwt_current());
+			__lwt_block();
+		}
+		
+		// Now the receiver is ready to receive, yield to it
+		debug_print("%p: __lwt_snd_blocked: yield to rcver %p.\n", lwt_current(), c->receiver);
+		lwt_yield(c->receiver);
 	}
-	
-	// now it is my turn, set the data
-	c->snd_data = data;
-	
-	// wait if it is my turn but no receiver exists or is blocked on this channel
-	while (!c->rcv_blocked && c->snd_data)
-	{
-		debug_print("%p: __lwt_snd_blocked: spinning no rcv.\n", lwt_current());
-		__lwt_block();
-	}
-	
-	// Now the receiver is ready to receive, yield to it
-	debug_print("%p: __lwt_snd_blocked: yield to rcver %p.\n", lwt_current(), c->receiver);
-	lwt_yield(c->receiver);
 }
 
 void* __lwt_rcv_blocked(lwt_chan_t c)
 {
-	debug_print("%p: __lwt_rcv_blocked: spinning nobody snd\n", lwt_current());
-	// spinning if nobody is sending on this channel
+	// wait if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
+		debug_print("%p: __lwt_rcv_blocked: wait nobody snd\n", lwt_current());
 		c->rcv_blocked = 1;
 		__lwt_block();
 	}
@@ -1304,7 +1341,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	void *data = c->snd_data;
 	c->snd_data = NULL;
 	c->rcv_blocked = 0;
-	
+
 	// remove sender from the sender queue
 	dlinkedlist_element_t* e = dlinkedlist_first(c->s_queue);
 	dlinkedlist_remove(c->s_queue, e);
@@ -1313,6 +1350,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	if (sndr->kthd != c->receiver->kthd)
 	{
 		__lwt_wakeup(__idle_thread);
+		debug_print("%p: wakeup sndr\n", lwt_current());
 		__lwt_kthd_wakeup(sndr);
 	}
 	// sndr is on the same kthd

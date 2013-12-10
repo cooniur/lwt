@@ -453,12 +453,13 @@ test_grpwait(int chsz, int grpsz)
 
 void* fn_kthd_test(void* data, lwt_chan_t c)
 {
-	printf("%p: running. ready to rcv...\n", lwt_current());
+	printf("%p: lwt running. ready to rcv...\n", lwt_current());
 	for (int i=0; i<ITER; i++)
 	{
 		void* p = lwt_rcv(c);
 		assert(p == (void*)0x123);
 	}
+	printf("lwt end\n");
 	return NULL;
 }
 
