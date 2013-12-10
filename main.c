@@ -453,16 +453,19 @@ test_grpwait(int chsz, int grpsz)
 
 void* fn_kthd_test(void* data, lwt_chan_t c)
 {
-	printf("%p: running.\n", lwt_current());
-	void* p = lwt_rcv(c);
-	printf("%p: data rcved: %p\n", lwt_current(), p);
+	printf("%p: running. ready to rcv...\n", lwt_current());
+	for (int i=0; i<ITER; i++)
+	{
+		void* p = lwt_rcv(c);
+		assert(p == (void*)0x123);
+	}
 	return NULL;
 }
 
 int
 main(void)
 {
-	test_perf();
+/*	test_perf();
 	test_crt_join_sched();
 	test_perf_channels(0);
 	test_multisend(0);
@@ -470,19 +473,21 @@ main(void)
 	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
-
-/*	printf("%p: main\n", lwt_current());
+*/
+	printf("%p: main\n", lwt_current());
 
 	lwt_chan_t c = lwt_chan(0, "r");
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
-	printf("%p: lwt_kthd_create: %d\n", lwt_current(), rc);
+	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
 
-	scanf("%d");
+	for (int i=0; i<ITER; i++)
+	{
+		rc = lwt_snd(c, (void*)0x123);
+		assert(rc == 0);
+	}
 
-	rc = lwt_snd(c, (void*)0x123);
-	printf("%p: lwt_snd: %d\n", lwt_current(), rc);
+	printf("end\n");
+	getchar();
 
-	scanf("%d");
-*/
 	return 0;
 }

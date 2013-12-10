@@ -869,8 +869,11 @@ struct __lwt_kthd_msg_t__* __lwt_kthd_msg_dequeue()
 	dlinkedlist_remove(__current_kthd->message_queue, e);
 	pthread_mutex_unlock(&__current_kthd->msg_queue_lock);
 
-	msg = e->data;
-	dlinkedlist_element_free(&e);
+	if (e)
+	{
+		msg = e->data;
+		dlinkedlist_element_free(&e);
+	}
 	return msg;
 }
 
@@ -1693,9 +1696,8 @@ void* __lwt_idle_thread_for_main(void* data, lwt_chan_t c)
 __attribute__((constructor))
 static void __lwt_init()
 {
-	__current_kthd = malloc(sizeof(struct __lwt_kthd_t__));
+	__current_kthd = __lwt_kthd_init();
 	__current_kthd->pthread_id = pthread_self();
-	__current_kthd->message_queue = dlinkedlist_init();
 
 	__lwt_main_thread_init();
 
