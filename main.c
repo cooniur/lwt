@@ -458,13 +458,13 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 	printf("%p: lwt running. ready to rcv...\n", lwt_current());
 	lwt_chan_t to = lwt_rcv(c);
 
-	for (int i=0; i<ITER; i++)
-	{
-		assert((void*)0x123 == lwt_rcv(c));
-	}
+	// for (int i=0; i<ITER; i++)
+	// {
+	// 	assert((void*)0x123 == lwt_rcv(c));
+	// }
 	lwt_chan_deref(&c);
 
-	for (int i=0; i<ITER; i++)
+	for (int i=0; i<10; i++)
 	{
 		assert(lwt_snd(to, (void*)0x234) == 0);
 	}
@@ -489,24 +489,24 @@ main(void)
 	printf("%p: main\n", lwt_current());
 
 	lwt_chan_t c = lwt_chan(0, "r");
-	lwt_chan_t from = lwt_chan(10, "r");
+	lwt_chan_t from = lwt_chan(3, "r");
 	lwt_cgrp_t g = lwt_cgrp();
 	lwt_cgrp_add(g, from, LWT_CHAN_SND);
-	
+
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
 	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
 
 	assert(lwt_snd(c, from) == 0);
 
-	for (int i=0; i<ITER; i++)
-	{
-		assert(lwt_snd(c, (void*)0x123) == 0);
-	}
+	// for (int i=0; i<ITER; i++)
+	// {
+	// 	assert(lwt_snd(c, (void*)0x123) == 0);
+	// }
 	lwt_chan_deref(&c);
 
 	lwt_chan_t rcvable;
 	lwt_chan_dir_t dir;
-	for (int i=0; i<ITER; i++)
+	for (int i=0; i<10; i++)
 	{
 		rcvable = lwt_cgrp_wait(g, &dir);
 		assert(lwt_rcv(rcvable) == (void*)0x234);

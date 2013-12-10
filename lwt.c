@@ -1284,9 +1284,15 @@ int __lwt_chan_try_to_free(lwt_chan_t *c)
 	{
 		__lwt_chan_free_snd_buffer(*c);
 		if ((*c)->grp[0])
+		{
 			lwt_cgrp_rem((*c)->grp[0], *c);
+			(*c)->grp[0] = NULL;
+		}
 		if ((*c)->grp[1])
+		{
 			lwt_cgrp_rem((*c)->grp[1], *c);
+			(*c)->grp[1] = NULL;
+		}
 
 		free((*c)->name);
 		free(*c);
