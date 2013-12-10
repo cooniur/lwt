@@ -905,7 +905,9 @@ void __lwt_kthd_msg_inqueue(struct __lwt_kthd_t__* kthd, struct __lwt_kthd_msg_t
 {
 	pthread_mutex_lock(&kthd->msg_queue_lock);
 	dlinkedlist_add(kthd->message_queue, dlinkedlist_element_init(msg));
+	debug_print("msg inqueue: %d\n", dlinkedlist_size(kthd->message_queue));
 	pthread_mutex_unlock(&kthd->msg_queue_lock);
+
 }
 
 struct __lwt_kthd_msg_t__* __lwt_kthd_msg_dequeue()
@@ -915,7 +917,10 @@ struct __lwt_kthd_msg_t__* __lwt_kthd_msg_dequeue()
 	pthread_mutex_lock(&__current_kthd->msg_queue_lock);
 	dlinkedlist_element_t* e = dlinkedlist_first(__current_kthd->message_queue);
 	dlinkedlist_remove(__current_kthd->message_queue, e);
+	if (dlinkedlist_size(__current_kthd->message_queue) > 0)
+		debug_print("msg dequeue: %d\n", dlinkedlist_size(__current_kthd->message_queue));
 	pthread_mutex_unlock(&__current_kthd->msg_queue_lock);
+
 
 	if (e)
 	{
@@ -955,9 +960,7 @@ void __lwt_kthd_idle()
 			break;
 		
 		struct __lwt_kthd_msg_t__* msg = __lwt_kthd_msg_dequeue();
-		if (!msg)
-			lwt_yield(LWT_NULL);
-		else
+		if (msg)
 		{
 			debug_print("%p: msg: %d\n", lwt_current(), msg->op);
 			switch (msg->op)
@@ -994,6 +997,7 @@ void __lwt_kthd_idle()
 					break;
 			}
 		}
+		lwt_yield(LWT_NULL);
 	}
 	
 	debug_print("pthread ended.\n");
@@ -1330,7 +1334,7 @@ void __lwt_snd_blocked_do(lwt_t sndr, lwt_chan_t c, void* data)
 	// wait if it is my turn but no receiver exists or is blocked on this channel
 	while (!c->rcv_blocked && c->snd_data)
 	{
-		debug_print("%p: __lwt_snd_blocked: wait no rcv.\n", lwt_current());
+		//debug_print("%p: __lwt_snd_blocked: wait no rcv.\n", lwt_current());
 		__lwt_block();
 	}
 	
@@ -1366,6 +1370,7 @@ void __lwt_snd_blocked(lwt_t sndr, lwt_chan_t c, void* data)
 	// meaning msg has been passed to the receiver's kthd
 	else
 	{
+		__lwt_wakeup(c->receiver);
 		__lwt_snd_blocked_do(sndr, c, data);
 	}
 }
@@ -1375,7 +1380,7 @@ void* __lwt_rcv_blocked(lwt_chan_t c)
 	// wait if nobody is sending on this channel
 	while (dlinkedlist_size(c->s_queue) == 0)
 	{
-		debug_print("%p: __lwt_rcv_blocked: wait nobody snd\n", lwt_current());
+		// debug_print("%p: __lwt_rcv_blocked: wait nobody snd\n", lwt_current());
 		c->rcv_blocked = 1;
 		__lwt_block();
 	}

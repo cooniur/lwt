@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #include "kthd_pool.h"
 
@@ -46,6 +47,7 @@ void* __kp_manager(void* reserved, lwt_chan_t from)
 			
 			lwt_kthd_create(req->work, NULL, req->c);
 		}
+		lwt_yield(NULL);
 	}
 	return NULL;
 }

@@ -458,11 +458,18 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 {
 	printf("%p: lwt running. ready to rcv...\n", lwt_current());
 	lwt_chan_t to = lwt_rcv(c);
+	assert(to);
+	
+	lwt_chan_t delegated = lwt_rcv_cdeleg(c);
+	assert(delegated);
 
-	// for (int i=0; i<ITER; i++)
-	// {
-	// 	assert((void*)0x123 == lwt_rcv(c));
-	// }
+	assert (lwt_rcv(delegated) == (void*)0x999);
+	lwt_chan_deref(&delegated);
+
+	for (int i=0; i<ITER; i++)
+	{
+		assert((void*)0x123 == lwt_rcv(c));
+	}
 	lwt_chan_deref(&c);
 
 	for (int i=0; i<ITER; i++)
@@ -470,76 +477,145 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 		assert(lwt_snd(to, (void*)0x234) == 0);
 	}
 	lwt_chan_deref(&to);
-	printf("lwt end\n");
+	printf("lwt: fn_kthd_test end.\n");
 	return NULL;
 }
 
 void test_kthd()
 {
-	printf("%p: main\n", lwt_current());
+	printf("[TEST] kthd create, snd/rcv....\n");
 	
 	lwt_chan_t c = lwt_chan(0, "r");
 	lwt_chan_t from = lwt_chan(0, "r");
-	lwt_cgrp_t g = lwt_cgrp();
-	lwt_cgrp_add(g, from, LWT_CHAN_SND);
+	lwt_chan_t delegated = lwt_chan(0, "r");
 	
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
-	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
+	assert(rc == 0);
 	
 	assert(lwt_snd(c, from) == 0);
 	
-	// for (int i=0; i<ITER; i++)
-	// {
-	// 	assert(lwt_snd(c, (void*)0x123) == 0);
-	// }
+	lwt_snd_cdeleg(c, delegated);
+
+	lwt_snd(delegated, (void*)0x999);
+	lwt_chan_deref(&delegated);
+
+	for (int i=0; i<ITER; i++)
+	{
+		assert(lwt_snd(c, (void*)0x123) == 0);
+	}
 	lwt_chan_deref(&c);
 	
 	lwt_chan_t rcvable;
 	lwt_chan_dir_t dir;
 	for (int i=0; i<ITER; i++)
 	{
-		//rcvable = lwt_cgrp_wait(g, &dir);
 		assert(lwt_rcv(from) == (void*)0x234);
 	}
 	lwt_chan_deref(&from);
-	printf("end\n");
+
+	printf("[TEST] kthd create, snd/rcv passed.\n");
 	getchar();
-	
-	assert(lwt_chan_sending_count(c) == 0);
-	assert(lwt_chan_sending_count(from) == 0);
+}
+
+void* fn_kthd_multisnd(void* reserved, lwt_chan_t from)
+{
+	printf("%p: rcv to_main\n", lwt_current());
+	lwt_chan_t to_main = lwt_rcv(from);
+
+	for (int i=0; i<ITER; i++)
+		lwt_snd(to_main, reserved);
+
+ 	printf("lwt_%p end.\n", reserved);
+}
+
+void test_kthd_multisnd(int c_sz)
+{
+	printf("[TEST]test_kthd_multisnd: channel size %d\n", c_sz);
+
+	lwt_chan_t from = lwt_chan(0, "main");
+	lwt_chan_t lwt_c[2];
+	void* lwt_data[2];
+	for(int i=0; i<2; i++)
+	{
+		lwt_c[i] = lwt_chan(c_sz, "lwt_c");
+		lwt_data[i] = (void*)(i+0x10);
+		int rc = lwt_kthd_create(&fn_kthd_multisnd, lwt_data[i], lwt_c[i]);
+		printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
+		lwt_snd(lwt_c[i], from);
+	}
+
+	for (int i=0; i<ITER * 2; i++)
+	{
+		void* r = lwt_rcv(from);
+		assert(r == (void*)0x10 || r == (void*)0x11);
+	}
+
+	printf("[TEST]test_kthd_multisnd: channel size %d passed.\n", c_sz);
+	getchar();
 }
 
 void* fn_kp_worker(void* reserved, lwt_chan_t from)
 {
 	printf("worker running...\n");
-	
+	int* count = lwt_rcv(from);
+	printf("worker count=%d\n", *count);
+	for(int i=0; i<*count; i++)
+	{
+		assert(lwt_rcv(from) == (void*)0x123);
+	}
+	printf("worker end\n");
 	return NULL;
 }
 
-void test_kp()
+void test_kpool()
 {
+	int rc;
+
+	printf("[TEST]test_kpool begin %p\n", lwt_current());
+
 	kp_t pool = kp_create();
 	lwt_chan_t to = lwt_chan(0, "to");
 	kp_work(pool, fn_kp_worker, to);
+	// have to wait for a while to let worker's pthread start execution
+	getchar();
+
+	int count = 10;
+	rc = lwt_snd(to, &count);
+	assert(rc == 0);
+
+	for (int i=0; i<count; i++)
+	{
+		rc = lwt_snd(to, (void*)0x123); 
+		assert(rc == 0);
+	}
+
 	kp_destroy(pool);
+	printf("[TEST]test_kpool passed.\n");
 	getchar();
 }
 
 int
 main(void)
 {
-/*
-	test_perf();
-	test_crt_join_sched();
-	test_perf_channels(0);
-	test_multisend(0);
-	test_perf_async_steam(ITER/10 < 100 ? ITER/10 : 100);
-	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
-	test_grpwait(0, 3);
-	test_grpwait(3, 3);
-*/
-//	test_kthd();
-	
-	
+	// printf("\n\n>>>>>> LWT TEST\n");	
+
+	// test_perf();
+	// test_crt_join_sched();
+	// test_perf_channels(0);
+	// test_multisend(0);
+	// test_perf_async_steam(ITER/10 < 100 ? ITER/10 : 100);
+	// test_multisend(ITER/10 < 100 ? ITER/10 : 100);
+	// test_grpwait(0, 3);
+	// test_grpwait(3, 3);
+
+	printf("\n>>>>>> KTHD TEST\n");	
+
+	// test_kthd();
+
+	// test_kthd_multisnd(0);
+	// test_kthd_multisnd(20);
+
+	test_kpool();
+
 	return 0;
 }
