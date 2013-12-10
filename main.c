@@ -456,11 +456,19 @@ test_grpwait(int chsz, int grpsz)
 void* fn_kthd_test(void* data, lwt_chan_t c)
 {
 	printf("%p: lwt running. ready to rcv...\n", lwt_current());
+	lwt_chan_t to = lwt_rcv(c);
+
 	for (int i=0; i<ITER; i++)
 	{
 		assert((void*)0x123 == lwt_rcv(c));
 	}
 	lwt_chan_deref(&c);
+
+	for (int i=0; i<ITER; i++)
+	{
+		assert(lwt_snd(to, (void*)0x234) == 0);
+	}
+	lwt_chan_deref(&to);
 	printf("lwt end\n");
 	return NULL;
 }
@@ -468,6 +476,7 @@ void* fn_kthd_test(void* data, lwt_chan_t c)
 int
 main(void)
 {
+/*
 	test_perf();
 	test_crt_join_sched();
 	test_perf_channels(0);
@@ -476,20 +485,38 @@ main(void)
 	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
 	test_grpwait(0, 3);
 	test_grpwait(3, 3);
-
+*/
 	printf("%p: main\n", lwt_current());
 
-	lwt_chan_t c = lwt_chan(10, "r");
+	lwt_chan_t c = lwt_chan(0, "r");
+	lwt_chan_t from = lwt_chan(10, "r");
+	lwt_cgrp_t g = lwt_cgrp();
+	lwt_cgrp_add(g, from, LWT_CHAN_SND);
+	
 	int rc = lwt_kthd_create(&fn_kthd_test, NULL, c);
 	printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
+
+	assert(lwt_snd(c, from) == 0);
 
 	for (int i=0; i<ITER; i++)
 	{
 		assert(lwt_snd(c, (void*)0x123) == 0);
 	}
 	lwt_chan_deref(&c);
+
+	lwt_chan_t rcvable;
+	lwt_chan_dir_t dir;
+	for (int i=0; i<ITER; i++)
+	{
+		rcvable = lwt_cgrp_wait(g, &dir);
+		assert(lwt_rcv(rcvable) == (void*)0x234);
+	}
+	lwt_chan_deref(&from);
 	printf("end\n");
 	getchar();
+
+	assert(lwt_chan_sending_count(c) == 0);
+	assert(lwt_chan_sending_count(from) == 0);
 
 	return 0;
 }

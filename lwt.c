@@ -1274,6 +1274,8 @@ void __lwt_chan_free_snd_buffer(lwt_chan_t c)
 {
 	if (c->snd_buffer)
 		ring_queue_free(&(c->snd_buffer));
+	dlinkedlist_free(c->s_list);
+	dlinkedlist_free(c->s_queue);
 }
 
 int __lwt_chan_try_to_free(lwt_chan_t *c)
@@ -1281,6 +1283,11 @@ int __lwt_chan_try_to_free(lwt_chan_t *c)
 	if (!((*c)->receiver) && dlinkedlist_size((*c)->s_list) == 0)
 	{
 		__lwt_chan_free_snd_buffer(*c);
+		if ((*c)->grp[0])
+			lwt_cgrp_rem((*c)->grp[0], *c);
+		if ((*c)->grp[1])
+			lwt_cgrp_rem((*c)->grp[1], *c);
+
 		free((*c)->name);
 		free(*c);
 		*c = NULL;
@@ -1506,7 +1513,7 @@ int lwt_chan_deref(lwt_chan_t* c)
 {
 	if (!c || !(*c))
 		return -1;
-	
+
 	lwt_t cur_lwt = __lwt_current_inline();
 	if ((*c)->receiver == cur_lwt)
 		(*c)->receiver = NULL;
