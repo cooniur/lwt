@@ -518,7 +518,7 @@ void test_kthd()
 
 void* fn_kthd_multisnd(void* reserved, lwt_chan_t from)
 {
-	printf("%p: rcv to_main\n", lwt_current());
+//	printf("%p: rcv to_main\n", lwt_current());
 	lwt_chan_t to_main = lwt_rcv(from);
 
 	for (int i=0; i<ITER; i++)
