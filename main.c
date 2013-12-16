@@ -525,6 +525,7 @@ void* fn_kthd_multisnd(void* reserved, lwt_chan_t from)
 		lwt_snd(to_main, reserved);
 
  	printf("lwt_%p end.\n", reserved);
+	return NULL;
 }
 
 void test_kthd_multisnd(int c_sz)
