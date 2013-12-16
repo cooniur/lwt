@@ -539,7 +539,7 @@ void test_kthd_multisnd(int c_sz)
 		lwt_c[i] = lwt_chan(c_sz, "lwt_c");
 		lwt_data[i] = (void*)(i+0x10);
 		int rc = lwt_kthd_create(&fn_kthd_multisnd, lwt_data[i], lwt_c[i]);
-		printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
+//		printf("%p: lwt_kthd_create: rc=%d\n", lwt_current(), rc);
 		lwt_snd(lwt_c[i], from);
 	}
 
