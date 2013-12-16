@@ -590,7 +590,6 @@ void test_kpool()
 
 	kp_destroy(pool);
 	printf("[TEST]test_kpool passed.\n");
-	getchar();
 }
 
 int
