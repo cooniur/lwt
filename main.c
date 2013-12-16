@@ -514,7 +514,6 @@ void test_kthd()
 	lwt_chan_deref(&from);
 
 	printf("[TEST] kthd create, snd/rcv passed.\n");
-	getchar();
 }
 
 void* fn_kthd_multisnd(void* reserved, lwt_chan_t from)
@@ -551,7 +550,6 @@ void test_kthd_multisnd(int c_sz)
 	}
 
 	printf("[TEST]test_kthd_multisnd: channel size %d passed.\n", c_sz);
-	getchar();
 }
 
 void* fn_kp_worker(void* reserved, lwt_chan_t from)
@@ -577,11 +575,9 @@ void test_kpool()
 	lwt_chan_t to = lwt_chan(0, "to");
 	kp_work(pool, fn_kp_worker, to);
 	// have to wait for a while to let worker's pthread start execution
-	for(int i=0; i<10000; i++)
-	{
-		double r = sin(i) * cos(i);
-	}
-
+	printf(">>> Press enter to continue kpool test...");
+	getchar();
+	
 	int count = 10;
 	rc = lwt_snd(to, &count);
 	assert(rc == 0);
