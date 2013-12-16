@@ -577,7 +577,10 @@ void test_kpool()
 	lwt_chan_t to = lwt_chan(0, "to");
 	kp_work(pool, fn_kp_worker, to);
 	// have to wait for a while to let worker's pthread start execution
-	getchar();
+	for(int i=0; i<10000; i++)
+	{
+		double r = sin(i) * cos(i);
+	}
 
 	int count = 10;
 	rc = lwt_snd(to, &count);
