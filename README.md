@@ -3,12 +3,19 @@ lwt
 
 Light-Weighted Thread Library
 
-version 0.2 alpha
+Build
+------
+Simply use Makefile to build the library and the test program.
+The executable output file is named "test".
 
-* Modified run_queue and wait_queue
-+ Added sync/bounded-async channel support between lwt threads
-+ Added grouped waiting on a number of channels
+Run the program
+----------------
+Type ./test to run the test program.
 
-tonylxc
-11/20/2013
+Modify testing functions
+-------------------------
+There are several testing functions in main.c. 
+Uncomment/commant one of them will enable/disable the testing on a specific part.
 
+
+12/16/2013

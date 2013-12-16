@@ -597,23 +597,23 @@ void test_kpool()
 int
 main(void)
 {
-	// printf("\n\n>>>>>> LWT TEST\n");	
+	printf("\n\n>>>>>> LWT TEST\n");	
 
-	// test_perf();
-	// test_crt_join_sched();
-	// test_perf_channels(0);
-	// test_multisend(0);
-	// test_perf_async_steam(ITER/10 < 100 ? ITER/10 : 100);
-	// test_multisend(ITER/10 < 100 ? ITER/10 : 100);
-	// test_grpwait(0, 3);
-	// test_grpwait(3, 3);
+	test_perf();
+	test_crt_join_sched();
+	test_perf_channels(0);
+	test_multisend(0);
+	test_perf_async_steam(ITER/10 < 100 ? ITER/10 : 100);
+	test_multisend(ITER/10 < 100 ? ITER/10 : 100);
+	test_grpwait(0, 3);
+	test_grpwait(3, 3);
 
 	printf("\n>>>>>> KTHD TEST\n");	
 
-	// test_kthd();
-
-	// test_kthd_multisnd(0);
-	// test_kthd_multisnd(20);
+	test_kthd();
+	
+	test_kthd_multisnd(0);
+	test_kthd_multisnd(20);
 
 	test_kpool();
 
